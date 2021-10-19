@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>zdrct</title>
+  </head>
+  <body>
+    <script type="text/javascript">
+      const BroadcasterID = {{ .BroadcasterID }};
+    </script>
+    <script type="text/javascript" src="app.js"></script>
+    <p id="twitch">
+    {{ if .BroadcasterID }}
+      Hello, Broadcaster {{ .BroadcasterID }}.
+    {{ else }}
+      Twitch API is not connected.
+      <a href="{{ .TwitchAuthLink }}" rel="noreferer nofollow noopener external">connect</a>
+    {{ end }}
+    </p>
+
+    <p>
+      <ol id="rewards"></ol>
+    </p>
+  </body>
+</html>
