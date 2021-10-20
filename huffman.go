@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"log"
 )
 
 var freqs []int = []int{
@@ -73,7 +72,7 @@ func init() {
 	}
 
 	min_idx1 := -1
-	for range freqs {
+	for i := 0; i < 255; i++ {
 		min_idx1 = 256
 		min_idx2 := 256
 		min_freq1 := MAX_FREQ
@@ -102,8 +101,6 @@ func init() {
 
 	tree_root = tree[min_idx1]
 	fill_table(tree_root, "")
-	log.Printf("root: %#v", tree_root)
-	log.Printf("table: %#v", table)
 }
 
 func fill_table(node *node, prefix string) {
@@ -136,7 +133,7 @@ func HuffmanEncode(data []byte) []byte {
 		v := byte(0)
 		for i, d := range chunk {
 			if d == byte('1') {
-				v |= 1 << (n - i - 1)
+				v |= 1 << i
 			}
 		}
 		b.WriteByte(v)

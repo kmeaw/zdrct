@@ -93,9 +93,6 @@ func InitAssetsTemplates(r *gin.Engine, tbox, abox *rice.Box) error {
 }
 
 func main() {
-	e := HuffmanEncode([]byte("Hello, World!"))
-	log.Printf("enc = %q", e)
-	log.Printf("dec = %q", HuffmanDecode(e))
 	twitch := NewTwitchClient()
 	rcon := NewRconClient
 	tbox := rice.MustFindBox("templates")
