@@ -199,37 +199,37 @@ type RewardImages struct {
 type Reward struct {
 	ID string `json:"id"`
 
-	BroadcasterID int64 `json:"broadcaster_id,string"`
+	BroadcasterID    int64  `json:"broadcaster_id,string"`
 	BroadcasterLogin string `json:"broadcaster_login"`
-	BroadcasterName string `json:"broadcaster_name"`
+	BroadcasterName  string `json:"broadcaster_name"`
 
-	Title string `json:"title"`
-	Prompt string `json:"prompt"`
-	Cost int `json:"cost"`
-	Image *RewardImages `json:"image"`
-	DefaultImage *RewardImages `json:"image"`
-	BackgroundColor string `json:"background_color"`
-	IsEnabled bool `json:"is_enabled"`
-	IsUserInputRequired bool `json:"is_user_input_required"`
+	Title               string        `json:"title"`
+	Prompt              string        `json:"prompt"`
+	Cost                int           `json:"cost"`
+	Image               *RewardImages `json:"image"`
+	DefaultImage        *RewardImages `json:"image"`
+	BackgroundColor     string        `json:"background_color"`
+	IsEnabled           bool          `json:"is_enabled"`
+	IsUserInputRequired bool          `json:"is_user_input_required"`
 
 	MaxPerStreamSetting struct {
-		IsEnabled bool `json:"is_enabled"`
-		MaxPerStream int `json:"max_per_stream"`
+		IsEnabled    bool `json:"is_enabled"`
+		MaxPerStream int  `json:"max_per_stream"`
 	} `json:"max_per_stream_setting"`
 	MaxPerUserPerStreamSetting struct {
-		IsEnabled bool `json:"is_enabled"`
-		MaxPerUserPerStream int `json:"max_per_user_per_stream"`
+		IsEnabled           bool `json:"is_enabled"`
+		MaxPerUserPerStream int  `json:"max_per_user_per_stream"`
 	} `json:"max_per_user_per_stream_setting"`
 	GlobalCooldownSetting struct {
-		IsEnabled bool `json:"is_enabled"`
-		GlobalCooldownSeconds int `json:"global_cooldown_seconds"`
+		IsEnabled             bool `json:"is_enabled"`
+		GlobalCooldownSeconds int  `json:"global_cooldown_seconds"`
 	} `json:"max_per_user_per_stream_setting"`
 
-	IsPaused bool `json:"is_paused"`
-	IsInStock bool `json:"is_in_stock"`
-	ShouldRedemptionsSkipRequestQueue bool `json:"should_redemptions_skip_request_queue"`
-	RedemptionsRedeemedCurrentStream *int `json:"redemptions_redeemed_current_stream"`
-	CooldownExpiresAt *time.Time `json:"cooldown_expires_at"`
+	IsPaused                          bool       `json:"is_paused"`
+	IsInStock                         bool       `json:"is_in_stock"`
+	ShouldRedemptionsSkipRequestQueue bool       `json:"should_redemptions_skip_request_queue"`
+	RedemptionsRedeemedCurrentStream  *int       `json:"redemptions_redeemed_current_stream"`
+	CooldownExpiresAt                 *time.Time `json:"cooldown_expires_at"`
 }
 
 func (c *TwitchClient) Prepare(ctx context.Context) error {

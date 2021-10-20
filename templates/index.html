@@ -9,12 +9,21 @@
     </script>
     <script type="text/javascript" src="app.js"></script>
     <p id="twitch">
-    {{ if .BroadcasterID }}
-      Hello, Broadcaster {{ .BroadcasterID }}.
+    {{ if .Twitch.BroadcasterID }}
+      Hello, Broadcaster {{ .Twitch.BroadcasterID }}.
     {{ else }}
       Twitch API is not connected.
-      <a href="{{ .TwitchAuthLink }}" rel="noreferer nofollow noopener external">connect</a>
+      <a href="{{ .Twitch.GetAuthLink "http://localhost:8666/auth" .CSRF }}" rel="noreferer nofollow noopener external">connect</a>
     {{ end }}
+    </p>
+
+    <p>
+      <form id="rcon_form">
+	RCON password: <input id="rcon_pwd" type="password" value="{{ .Rcon.Password }}" />
+	<input type="submit" value="Set" />
+      </form>
+
+      <p id="rcon_status"></p>
     </p>
 
     <p>

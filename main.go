@@ -6,7 +6,10 @@ import (
 	"html/template"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
+	"os/exec"
+	"runtime"
 	"strings"
 
 	"github.com/GeertJohan/go.rice"
@@ -90,7 +93,11 @@ func InitAssetsTemplates(r *gin.Engine, tbox, abox *rice.Box) error {
 }
 
 func main() {
+	e := HuffmanEncode([]byte("Hello, World!"))
+	log.Printf("enc = %q", e)
+	log.Printf("dec = %q", HuffmanDecode(e))
 	twitch := NewTwitchClient()
+	rcon := NewRconClient
 	tbox := rice.MustFindBox("templates")
 	abox := rice.MustFindBox("assets")
 
@@ -131,10 +138,10 @@ func main() {
 
 		twitch.Token = p.Token
 		err := twitch.Prepare(c.Request.Context())
-		
+
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusOK, gin.H{
-				"error": "twitch_error",
+				"error":       "twitch_error",
 				"description": err.Error(),
 			})
 			return
@@ -145,13 +152,34 @@ func main() {
 
 	r.GET("/", func(c *gin.Context) {
 		c.HTML(http.StatusOK, "index.html", gin.H{
-			"BroadcasterID": twitch.BroadcasterID,
-			"TwitchAuthLink": twitch.GetAuthLink("http://localhost:8666/oauth", csrf),
+			"CSRF":   csrf,
+			"Twitch": twitch,
+			"Rcon":   rcon,
 		})
 	})
 
+	l, err := net.Listen("tcp", "localhost:8666")
+	if err != nil {
+		log.Panic(err)
+	}
+
 	log.Println("Starting up a server on http://localhost:8666/")
-	log.Panic(r.Run("localhost:8666"))
+	go func() {
+		return
+		switch runtime.GOOS {
+		case "linux":
+			exec.Command("xdg-open", "http://localhost:8666/").Start()
+		case "windows":
+			exec.Command(
+				"rundll32",
+				"url.dll,FileProtocolHandler",
+				"http://localhost:8666/",
+			).Start()
+		case "darwin":
+			exec.Command("open", "http://localhost:8666/").Start()
+		}
+	}()
+	log.Panic(r.RunListener(l))
 }
 
 // vim: ai:ts=8:sw=8:noet:syntax=go

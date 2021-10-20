@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -10,7 +11,8 @@ type RconClient struct {
 	Addr     *net.UDPAddr
 	Password string
 
-	c *net.UDPConn
+	c  *net.UDPConn
+	mu *sync.Mutex
 }
 
 // https://wiki.zandronum.com/RCon_protocol
@@ -18,6 +20,7 @@ type RconClient struct {
 // Messages that the server sends to the client always begin with one
 // of the following bytes:
 type SVRC byte
+
 const (
 	SVRC_OLDPROTOCOL SVRC = iota + 32
 	SVRC_BANNED
@@ -33,6 +36,7 @@ const (
 // Messages that the client sends to the server always begin with one
 // of the following bytes:
 type CLRC byte
+
 const (
 	CLRC_BEGINCONNECTION CLRC = iota + 52
 	CLRC_PASSWORD
@@ -45,6 +49,7 @@ const (
 // Also, when the server sends SVRC_UPDATE, it's immediately followed
 // by another byte:
 type SVRCU byte
+
 const (
 	SVRCU_PLAYERDATA SVRCU = iota
 	SVRCU_ADMINCOUNT
@@ -54,27 +59,40 @@ const (
 const PROTOCOL_VERSION = 4
 const PONG_INTERVAL = time.Second * 5
 
-func NewRconClient(hostport, password string) (c *RconClient, err error) {
-	c = &RconClient{}
-	c.Addr, err = net.ResolveUDPAddr("udp", hostport)
-	if err != nil {
-		c = nil
-		return
-	}
+func NewRconClient() *RconClient {
+	r := &RconClient{mu: &sync.Mutex{}}
+	go r.ponger(time.NewTicker(PONG_INTERVAL))
 
-	return
+	return r
 }
 
 func (r *RconClient) ponger(t *time.Ticker) {
 	for range t.C {
-		_, err := r.c.Write([]byte{0xFF, byte(CLRC_PONG)})
+		r.mu.Lock()
+		conn := r.c
+		r.mu.Unlock()
+
+		if conn == nil {
+			continue
+		}
+
+		_, err := conn.Write([]byte{0xFF, byte(CLRC_PONG)})
 		if err != nil {
 			log.Printf("cannot pong: %s", err)
 		}
 	}
 }
 
-func (r *RconClient) Connect() (err error) {
+func (r *RconClient) Connect(hostport, password string) (err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.Addr, err = net.ResolveUDPAddr("udp", hostport)
+	if err != nil {
+		r.Addr = nil
+		return
+	}
+
 	r.c, err = net.DialUDP("udp", nil, r.Addr)
 	if err != nil {
 		return
@@ -85,14 +103,12 @@ func (r *RconClient) Connect() (err error) {
 			r.c.Close()
 			r.c = nil
 		}
-	} ()
+	}()
 
 	_, err = r.c.Write([]byte{0xFF, byte(CLRC_BEGINCONNECTION), PROTOCOL_VERSION})
 	if err != nil {
 		return
 	}
-
-	go r.ponger(time.NewTicker(PONG_INTERVAL))
 
 	return
 }
