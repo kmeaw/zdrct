@@ -207,7 +207,7 @@ type Reward struct {
 	Prompt              string        `json:"prompt"`
 	Cost                int           `json:"cost"`
 	Image               *RewardImages `json:"image"`
-	DefaultImage        *RewardImages `json:"image"`
+	DefaultImage        *RewardImages `json:"default_image"`
 	BackgroundColor     string        `json:"background_color"`
 	IsEnabled           bool          `json:"is_enabled"`
 	IsUserInputRequired bool          `json:"is_user_input_required"`
@@ -223,7 +223,7 @@ type Reward struct {
 	GlobalCooldownSetting struct {
 		IsEnabled             bool `json:"is_enabled"`
 		GlobalCooldownSeconds int  `json:"global_cooldown_seconds"`
-	} `json:"max_per_user_per_stream_setting"`
+	} `json:"global_cooldown_setting"`
 
 	IsPaused                          bool       `json:"is_paused"`
 	IsInStock                         bool       `json:"is_in_stock"`

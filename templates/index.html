@@ -18,12 +18,22 @@
     </p>
 
     <p>
-      <form id="rcon_form">
-	RCON password: <input id="rcon_pwd" type="password" value="{{ .Rcon.Password }}" />
-	<input type="submit" value="Set" />
+      <form method="POST" action="/rcon/config">
+        RCON address: <input name="addr" value="{{ .Rcon.Addr }}" /><br />
+        RCON password: <input name="password" type="password" value="{{ .Rcon.Password }}" /><br />
+        <input type="submit" value="Set" />
       </form>
 
-      <p id="rcon_status"></p>
+      <p>
+        {{ if .Rcon.IsOnline }}
+        online
+        <form method="POST" action="/rcon">
+          test: <input name="command" /> <input type="submit" value="go" />
+        </form>
+        {{ else }}
+        offline
+        {{ end }}
+      </p>
     </p>
 
     <p>

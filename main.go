@@ -94,7 +94,7 @@ func InitAssetsTemplates(r *gin.Engine, tbox, abox *rice.Box) error {
 
 func main() {
 	twitch := NewTwitchClient()
-	rcon := NewRconClient
+	rcon := NewRconClient()
 	tbox := rice.MustFindBox("templates")
 	abox := rice.MustFindBox("assets")
 
@@ -147,6 +147,52 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 
+	r.POST("/rcon/config", func(c *gin.Context) {
+		var p struct {
+			Addr     string `form:"addr"`
+			Password string `form:"password"`
+		}
+
+		if err := c.ShouldBind(&p); err != nil {
+			c.AbortWithError(http.StatusBadRequest, err)
+			return
+		}
+
+		rcon.Close()
+
+		err = rcon.Connect(p.Addr, p.Password)
+		if err != nil {
+			c.HTML(http.StatusOK, "error.html", gin.H{"Error": err.Error()})
+			return
+		}
+
+		c.Redirect(http.StatusFound, "/")
+	})
+
+	r.POST("/rcon", func(c *gin.Context) {
+		var p struct {
+			Command string `form:"command"`
+		}
+
+		if err := c.ShouldBind(&p); err != nil {
+			c.AbortWithError(http.StatusBadRequest, err)
+			return
+		}
+
+		if !rcon.IsOnline() {
+			c.HTML(http.StatusOK, "error.html", gin.H{"Error": "not connected"})
+			return
+		}
+
+		err = rcon.Command(p.Command)
+		if err != nil {
+			c.HTML(http.StatusOK, "error.html", gin.H{"Error": err.Error()})
+			return
+		}
+
+		c.Redirect(http.StatusFound, "/")
+	})
+
 	r.GET("/", func(c *gin.Context) {
 		c.HTML(http.StatusOK, "index.html", gin.H{
 			"CSRF":   csrf,
@@ -162,7 +208,6 @@ func main() {
 
 	log.Println("Starting up a server on http://localhost:8666/")
 	go func() {
-		return
 		switch runtime.GOOS {
 		case "linux":
 			exec.Command("xdg-open", "http://localhost:8666/").Start()

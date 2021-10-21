@@ -2,10 +2,12 @@ package main
 
 import (
 	"crypto/md5"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -15,11 +17,16 @@ type RconClient struct {
 	Addr     *net.UDPAddr
 	Password string
 
-	c  *net.UDPConn
-	mu *sync.Mutex
+	c *net.UDPConn
 
 	Messages <-chan string
-	Updates  <-chan Update
+
+	Players                 []string
+	PlayerCount, AdminCount int
+	Map                     string
+
+	cv *sync.Cond
+	mu *sync.Mutex
 }
 
 // https://wiki.zandronum.com/RCon_protocol
@@ -63,20 +70,16 @@ const (
 	SVRCU_MAP
 )
 
-type Update struct {
-	SVRCU                   SVRCU
-	Players                 []string
-	PlayerCount, AdminCount int
-	Map                     string
-	Data                    []byte
-}
-
 const PROTOCOL_VERSION = 4
 const PONG_INTERVAL = time.Second * 5
 
 func NewRconClient() *RconClient {
-	r := &RconClient{
-		mu: &sync.Mutex{},
+	r := &RconClient{}
+	r.mu = new(sync.Mutex)
+	r.cv = sync.NewCond(r.mu)
+	r.Addr = &net.UDPAddr{
+		IP:   net.IP{127, 0, 0, 1},
+		Port: 10666,
 	}
 	go r.ponger(time.NewTicker(PONG_INTERVAL))
 
@@ -101,14 +104,26 @@ func (r *RconClient) ponger(t *time.Ticker) {
 }
 
 func (r *RconClient) Recv() ([]byte, error) {
+	r.mu.Lock()
+	conn := r.c
+	r.mu.Unlock()
+
+	if conn == nil {
+		return nil, nil
+	}
+
 	buf := make([]byte, 4096)
-	err := r.c.SetReadDeadline(time.Now().Add(4 * time.Second))
+	err := conn.SetReadDeadline(time.Now().Add(4 * time.Second))
 	if err != nil {
 		return nil, err
 	}
 
 	n, err := r.c.Read(buf)
 	if err != nil {
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			return nil, nil
+		}
+
 		return nil, err
 	}
 
@@ -120,11 +135,19 @@ func (r *RconClient) Recv() ([]byte, error) {
 }
 
 func (r *RconClient) Send(clrc CLRC, buf []byte) error {
-	_, err := r.c.Write(append([]byte{byte(clrc)}, buf...))
+	_, err := r.c.Write(append([]byte{0xff, byte(clrc)}, buf...))
 	return err
 }
 
-func (r *RconClient) loop(messages chan<- string, updates chan<- Update) {
+func (r *RconClient) IsOnline() bool {
+	if r.c == nil {
+		return false
+	}
+
+	return true
+}
+
+func (r *RconClient) loop(messages chan<- string) {
 	for {
 		pkt, err := r.Recv()
 		if err != nil {
@@ -132,31 +155,35 @@ func (r *RconClient) loop(messages chan<- string, updates chan<- Update) {
 			break
 		}
 
+		if pkt == nil {
+			continue
+		}
+
 		switch SVRC(pkt[0]) {
 		case SVRC_MESSAGE:
+			log.Printf("rcon msg: %q", pkt[1:])
 			messages <- string(pkt[1:])
 
 		case SVRC_UPDATE:
-			upd := Update{
-				SVRCU: SVRCU(pkt[1]),
-				Data:  pkt[2:],
-			}
-			switch upd.SVRCU {
+			r.mu.Lock()
+
+			switch SVRCU(pkt[1]) {
 			case SVRCU_PLAYERDATA:
-				upd.PlayerCount = int(pkt[3])
-				upd.Players = strings.Split(string(pkt[4:]), "\000")
+				r.PlayerCount = int(pkt[3])
+				r.Players = strings.Split(string(pkt[4:]), "\000")
 
 			case SVRCU_ADMINCOUNT:
-				upd.AdminCount = int(pkt[3])
+				r.AdminCount = int(pkt[3])
 
 			case SVRCU_MAP:
-				upd.Map = string(upd.Data)
+				r.Map = string(pkt[3:])
 
 			default:
 				log.Printf("unexpected svrcu: %x", pkt[1:])
 			}
 
-			updates <- upd
+			r.cv.Broadcast()
+			r.mu.Unlock()
 
 		case SVRC_TABCOMPLETE, SVRC_TOOMANYTABCOMPLETES:
 			// not implemented yet
@@ -167,7 +194,6 @@ func (r *RconClient) loop(messages chan<- string, updates chan<- Update) {
 	}
 
 	close(messages)
-	close(updates)
 }
 
 func (r *RconClient) Command(cmd string) error {
@@ -176,25 +202,21 @@ func (r *RconClient) Command(cmd string) error {
 
 func (r *RconClient) Connect(hostport, password string) (err error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
+	prev_addr := r.Addr
 	r.Addr, err = net.ResolveUDPAddr("udp", hostport)
+	r.mu.Unlock()
+
 	if err != nil {
-		r.Addr = nil
+		r.Addr = prev_addr
 		return
 	}
 
+	r.mu.Lock()
 	r.c, err = net.DialUDP("udp", nil, r.Addr)
+	r.mu.Unlock()
 	if err != nil {
 		return
 	}
-
-	defer func() {
-		if err != nil && r.c != nil {
-			r.c.Close()
-			r.c = nil
-		}
-	}()
 
 	err = r.Send(CLRC_BEGINCONNECTION, []byte{PROTOCOL_VERSION})
 	if err != nil {
@@ -208,15 +230,17 @@ func (r *RconClient) Connect(hostport, password string) (err error) {
 			return
 		}
 
+		if pkt == nil {
+			err = fmt.Errorf("timed out")
+			r.Close()
+			return
+		}
+
 		switch SVRC(pkt[0]) {
 		case SVRC_LOGGEDIN:
 			messages := make(chan string, 16)
-			updates := make(chan Update, 16)
-
-			go r.loop(messages, updates)
-
+			go r.loop(messages)
 			r.Messages = messages
-			r.Updates = updates
 
 			return
 
@@ -243,12 +267,21 @@ func (r *RconClient) Connect(hostport, password string) (err error) {
 			return
 		}
 	}
-
-	return
 }
 
 func (r *RconClient) Close() error {
-	return r.Send(CLRC_DISCONNECT, nil)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.c == nil {
+		return nil
+	}
+
+	r.Send(CLRC_DISCONNECT, nil)
+	err := r.c.Close()
+	r.c = nil
+
+	return err
 }
 
 // vim: ai:ts=8:sw=8:noet:syntax=go
