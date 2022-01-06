@@ -19,7 +19,7 @@ type RconClient struct {
 
 	c *net.UDPConn
 
-	Messages <-chan string
+	messages <-chan string
 
 	Players                 []string
 	PlayerCount, AdminCount int
@@ -109,7 +109,7 @@ func (r *RconClient) Recv() ([]byte, error) {
 	r.mu.Unlock()
 
 	if conn == nil {
-		return nil, nil
+		return nil, net.ErrClosed
 	}
 
 	buf := make([]byte, 4096)
@@ -140,6 +140,9 @@ func (r *RconClient) Send(clrc CLRC, buf []byte) error {
 }
 
 func (r *RconClient) IsOnline() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	if r.c == nil {
 		return false
 	}
@@ -161,28 +164,34 @@ func (r *RconClient) loop(messages chan<- string) {
 
 		switch SVRC(pkt[0]) {
 		case SVRC_MESSAGE:
-			log.Printf("rcon msg: %q", pkt[1:])
 			messages <- string(pkt[1:])
 
 		case SVRC_UPDATE:
 			r.mu.Lock()
 
+			if len(pkt) < 3 {
+				log.Printf("bad svrcu: %x", pkt)
+				goto bad_svrcu
+			}
+
 			switch SVRCU(pkt[1]) {
 			case SVRCU_PLAYERDATA:
-				r.PlayerCount = int(pkt[3])
-				r.Players = strings.Split(string(pkt[4:]), "\000")
+				r.PlayerCount = int(pkt[2])
+				r.Players = strings.Split(string(pkt[3:]), "\000")
 
 			case SVRCU_ADMINCOUNT:
-				r.AdminCount = int(pkt[3])
+				r.AdminCount = int(pkt[2])
 
 			case SVRCU_MAP:
-				r.Map = string(pkt[3:])
+				r.Map = string(pkt[2:])
 
 			default:
 				log.Printf("unexpected svrcu: %x", pkt[1:])
 			}
 
 			r.cv.Broadcast()
+
+		bad_svrcu:
 			r.mu.Unlock()
 
 		case SVRC_TABCOMPLETE, SVRC_TOOMANYTABCOMPLETES:
@@ -203,11 +212,16 @@ func (r *RconClient) Command(cmd string) error {
 func (r *RconClient) Connect(hostport, password string) (err error) {
 	r.mu.Lock()
 	prev_addr := r.Addr
+	prev_password := r.Password
+	r.Password = password
 	r.Addr, err = net.ResolveUDPAddr("udp", hostport)
 	r.mu.Unlock()
 
 	if err != nil {
+		r.mu.Lock()
 		r.Addr = prev_addr
+		r.Password = prev_password
+		r.mu.Unlock()
 		return
 	}
 
@@ -240,15 +254,18 @@ func (r *RconClient) Connect(hostport, password string) (err error) {
 		case SVRC_LOGGEDIN:
 			messages := make(chan string, 16)
 			go r.loop(messages)
-			r.Messages = messages
+			r.mu.Lock()
+			r.messages = messages
+			r.mu.Unlock()
 
 			return
 
 		case SVRC_SALT:
 			h := md5.New()
 			h.Write(pkt[1:33])
-			h.Write([]byte(r.Password))
-			err = r.Send(CLRC_PASSWORD, []byte(fmt.Sprintf("%x", h.Sum(nil))))
+			h.Write([]byte(password))
+			hsum := []byte(fmt.Sprintf("%x", h.Sum(nil)))
+			err = r.Send(CLRC_PASSWORD, hsum)
 
 		case SVRC_OLDPROTOCOL:
 			err = fmt.Errorf("client protocol is too old")
@@ -261,6 +278,9 @@ func (r *RconClient) Connect(hostport, password string) (err error) {
 
 		case SVRC_MESSAGE:
 			log.Printf("unsolicited message: %q", pkt[1:])
+
+		default:
+			log.Printf("unexpected svrc: %x", pkt)
 		}
 
 		if err != nil {
@@ -282,6 +302,32 @@ func (r *RconClient) Close() error {
 	r.c = nil
 
 	return err
+}
+
+func (r *RconClient) Locked(fn func(*RconClient) error) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return fn(r)
+}
+
+func (r *RconClient) Wait() {
+	r.cv.Wait()
+}
+
+func (r *RconClient) Messages() <-chan string {
+	r.mu.Lock()
+	msg := r.messages
+	r.mu.Unlock()
+
+	if msg != nil {
+		return msg
+	}
+
+	fallback := make(chan string)
+	close(fallback)
+
+	return fallback
 }
 
 // vim: ai:ts=8:sw=8:noet:syntax=go
