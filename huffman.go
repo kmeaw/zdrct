@@ -182,6 +182,9 @@ func HuffmanDecode(data []byte) []byte {
 			}
 		}
 	}
+	if node != tree_root {
+		b.WriteByte(node.val)
+	}
 
 	return b.Bytes()
 }
