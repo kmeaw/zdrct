@@ -16,4 +16,4 @@ clean:
 run: zdrct
 	./zdrct
 
-.PHONY: dist clean rnu
+.PHONY: dist clean run
