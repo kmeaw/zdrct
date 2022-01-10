@@ -10,12 +10,29 @@ typedef int socklen_t;
 #include <errno.h>
 #endif
 
+#ifdef WIN32
+void
+__attribute__((stdcall))
+(*cdocommand_ptr_std) (const char *, int);
+void
+__attribute__((fastcall))
+(*cdocommand_ptr_fast) (const char *, int);
+#else
 void (*cdocommand_ptr) (const char *, int);
+#endif
+
 
 static void cons_perror(const char *prefix) {
     static char errmsg[512 + 12] = "echo ERROR: ";
 
-    if (cdocommand_ptr == NULL) {
+    if (
+#ifdef WIN32
+        cdocommand_ptr_std == NULL
+        && cdocommand_ptr_fast == NULL
+#else
+        cdocommand_ptr == NULL
+#endif
+    ) {
         perror(prefix);
         return;
     }
@@ -26,11 +43,14 @@ static void cons_perror(const char *prefix) {
     *ptr++ = ' ';
 #ifdef WIN32
     sprintf(ptr, "errno %d", WSAGetLastError());
+    if (cdocommand_ptr_std != NULL)
+        (*cdocommand_ptr_std) (errmsg, 0);
+    else if (cdocommand_ptr_fast != NULL)
+        (*cdocommand_ptr_fast) (errmsg, 0);
 #else
     strcpy(ptr, strerror(errno));
-#endif
-
     (*cdocommand_ptr) (errmsg, 0);
+#endif
 }
 
 #define CLRC_BEGINCONNECTION 52
@@ -50,6 +70,18 @@ void
 rconserver(__attribute__((unused)) void* _unused0) {
     static char buf[4096];
 
+#ifdef WIN32
+    WSADATA wsaData;
+    int iResult;
+
+    // Initialize Winsock
+    iResult = WSAStartup(MAKEWORD(2,2), &wsaData);
+    if (iResult != 0) {
+        printf("WSAStartup failed: %d\n", iResult);
+        goto rconend;
+    }
+#endif
+
     s = socket(AF_INET, SOCK_DGRAM, 0);
     if (s < 0) {
         cons_perror("socket");
@@ -67,6 +99,8 @@ rconserver(__attribute__((unused)) void* _unused0) {
         cons_perror("bind");
         goto rconend;
     }
+
+    puts("rconserver is ready.");
 
     while (1) {
         int sz = recvfrom(s, buf, sizeof(buf) - 1, 0, (struct sockaddr *) &rmt, &rmt_sz);
@@ -94,11 +128,26 @@ rconserver(__attribute__((unused)) void* _unused0) {
             break;
 
         case CLRC_COMMAND:
-            if (cdocommand_ptr == NULL) {
+            if (
+#ifdef WIN32
+                cdocommand_ptr_std == NULL
+                && cdocommand_ptr_fast == NULL
+#else
+                cdocommand_ptr == NULL
+#endif
+            ) {
                 fprintf(stderr, "console is not initialized, dropping message: %s\n", buf + 2);
             } else {
+#ifdef WIN32
+                if (cdocommand_ptr_std != NULL)
+                    (*cdocommand_ptr_std) (buf + 2, 0);
+                else if (cdocommand_ptr_fast != NULL)
+                    (*cdocommand_ptr_fast) (buf + 2, 0);
+#else
                 (*cdocommand_ptr) (buf + 2, 0);
+#endif
             }
+            printf("C_DoCommand(%s);\n", buf + 2);
             break;
         }
     }

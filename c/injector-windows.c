@@ -10,7 +10,12 @@
 
 #include "injector.h"
 
+#ifdef WIN32
+extern void* cdocommand_ptr_std;
+extern void* cdocommand_ptr_fast;
+#else
 extern void* cdocommand_ptr;
+#endif
 extern unsigned long rconserver(void*) __attribute__((stdcall));
 
 #define STACK_SIZE (8 * 1024 * 1024)
@@ -62,17 +67,30 @@ static void do_inject () {
     printf("toggle_idmypos = %p\n", toggle_idmypos);
 
     void* printf_ptr = scan(PAGE_EXECUTE_READ, search_data_ref, script_error);
-    cdocommand_ptr = scan(PAGE_EXECUTE_READ, search_data_ref, toggle_idmypos);
     printf("Printf = %p\n", printf_ptr);
+
+#ifdef WIN32
+    cdocommand_ptr_std = scan(PAGE_EXECUTE_READ, search_data_ref, toggle_idmypos);
+    if (cdocommand_ptr_std != NULL) {
+        printf("C_DoCommand = stdcall %p\n", cdocommand_ptr_std);
+    } else {
+        cdocommand_ptr_fast = scan(PAGE_EXECUTE_READ, search_data_ref_fast, toggle_idmypos);
+        printf("C_DoCommand = fastcall %p\n", cdocommand_ptr_fast);
+    }
+#else
+    cdocommand_ptr = scan(PAGE_EXECUTE_READ, search_data_ref, toggle_idmypos);
     printf("C_DoCommand = %p\n", cdocommand_ptr);
+#endif
 
     if (CreateThread(NULL, STACK_SIZE, rconserver, NULL, 0, NULL) == INVALID_HANDLE_VALUE) {
         perror("clone");
     }
 }
 
-BOOL WINAPI DllMain(HANDLE hDllHandle, DWORD dwReason, LPVOID lpreserved) {
+BOOL WINAPI DllMain(__attribute__((unused)) HANDLE hDllHandle, __attribute__((unused)) DWORD dwReason, __attribute__ ((unused)) LPVOID lpreserved) {
     if (dwReason == DLL_PROCESS_ATTACH) {
+        AllocConsole();
+        freopen("CONOUT$", "w", stdout);
         puts("injector: in DllMain");
         do_inject();
     }
