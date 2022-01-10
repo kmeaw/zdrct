@@ -13,7 +13,7 @@
       Hello, Broadcaster {{ .Twitch.BroadcasterID }}.
     {{ else }}
       Twitch API is not connected.
-      <a href="{{ .Twitch.GetAuthLink "http://localhost:8666/auth" .CSRF }}" rel="noreferer nofollow noopener external">connect</a>
+      <a href="{{ .Twitch.GetAuthLink "http://localhost:8666/oauth" .CSRF }}" rel="noreferer nofollow noopener external">connect</a>
     {{ end }}
     </p>
 
