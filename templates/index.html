@@ -18,6 +18,13 @@
     </p>
 
     <p>
+      <form method="POST" action="/rundoom">
+	 Doom executable path: <input name="path" value="" /><br />
+        <input type="submit" value="Run" />
+      </form>
+    </p>
+
+    <p>
       <form method="POST" action="/rcon/config">
         RCON address: <input name="addr" value="{{ .Rcon.Addr }}" /><br />
         RCON password: <input name="password" type="password" value="{{ .Rcon.Password }}" /><br />

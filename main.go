@@ -147,6 +147,24 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 
+	r.POST("/rundoom", func(c *gin.Context) {
+		var p struct {
+			Path string `form:"path"`
+		}
+
+		if err := c.ShouldBind(&p); err != nil {
+			c.AbortWithError(http.StatusBadRequest, err)
+			return
+		}
+
+		err := inject(p.Path)
+		if err != nil {
+			c.HTML(http.StatusOK, "error.html", gin.H{"Error": err.Error()})
+			return
+		}
+		c.Redirect(http.StatusFound, "/")
+	})
+
 	r.POST("/rcon/config", func(c *gin.Context) {
 		var p struct {
 			Addr     string `form:"addr"`

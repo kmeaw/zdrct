@@ -76,6 +76,8 @@ int main(int argc, char **argv) {
 
         // Inject the shared library into the address space of the process,
         // through a call to LoadLibrary.
+	fprintf(stderr, "CreateRemoteThread(%d, NULL, 0, %p, %p, 0, NULL);\n",
+			pi.hProcess, LoadLibraryA, page);
         hThread = CreateRemoteThread(pi.hProcess, NULL, 0, (LPTHREAD_START_ROUTINE) LoadLibraryA, page, 0, NULL);
         if (hThread == NULL) {
             fprintf(stderr, "CreateRemoteThread failed; error code = 0x%08X\n", GetLastError());
