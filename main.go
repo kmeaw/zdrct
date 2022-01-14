@@ -3,12 +3,15 @@ package main
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"html/template"
 	"io/fs"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -16,6 +19,8 @@ import (
 	"github.com/gin-gonic/contrib/renders/multitemplate"
 	"github.com/gin-gonic/gin"
 )
+
+var assets = make(map[string]string)
 
 func InitAssetsTemplates(r *gin.Engine, tbox, abox *rice.Box) error {
 	var err error
@@ -26,7 +31,7 @@ func InitAssetsTemplates(r *gin.Engine, tbox, abox *rice.Box) error {
 
 	tbox.Walk("", func(path string, info fs.FileInfo, err error) error {
 		if err != nil {
-			return err
+			return fmt.Errorf("cannot walk over tbox: %w", err)
 		}
 
 		if path != "" {
@@ -46,24 +51,35 @@ func InitAssetsTemplates(r *gin.Engine, tbox, abox *rice.Box) error {
 	render := multitemplate.New()
 	ptmpls := make(map[string]*template.Template)
 	for _, pname := range pnames {
-		if strings.HasSuffix(pname, ".swp") {
+		if strings.HasSuffix(pname, ".swp") || strings.HasPrefix(pname, ".") {
+			continue
+		}
+		pname = filepath.Base(pname)
+		if pname == "templates" {
 			continue
 		}
 		if data, err = tbox.String(pname); err != nil {
-			return err
+			return fmt.Errorf("cannot open %q from tbox while iterating over pnames: %w", pname, err)
 		}
 		pname = strings.TrimSuffix(pname, ".html")
 		if tmpl, err = template.New(pname).Parse(data); err != nil {
-			return err
+			return fmt.Errorf("cannot parse template %q: %w", pname, err)
 		}
 		ptmpls[pname] = tmpl
 	}
 	for _, name := range names {
+		name = filepath.Base(name)
+		if name == "templates" {
+			continue
+		}
+		if strings.HasSuffix(name, ".swp") || strings.HasPrefix(name, ".") {
+			continue
+		}
 		if data, err = tbox.String(name); err != nil {
-			return err
+			return fmt.Errorf("cannot open %q from tbox while iterating over names: %w", name, err)
 		}
 		if tmpl, err = template.New(name).Parse(data); err != nil {
-			return err
+			return fmt.Errorf("cannot parse template %q: %w", name, err)
 		}
 		for pname, ptmpl := range ptmpls {
 			tmpl.AddParseTree(pname, ptmpl.Tree)
@@ -75,7 +91,7 @@ func InitAssetsTemplates(r *gin.Engine, tbox, abox *rice.Box) error {
 	h := abox.HTTPBox()
 	abox.Walk("", func(path string, info fs.FileInfo, err error) error {
 		if err != nil {
-			return err
+			return fmt.Errorf("cannot walk over abox: %w", err)
 		}
 
 		if strings.HasSuffix(path, ".swp") {
@@ -83,9 +99,13 @@ func InitAssetsTemplates(r *gin.Engine, tbox, abox *rice.Box) error {
 		}
 
 		if path != "" {
-			r.GET(path, func(c *gin.Context) {
-				c.FileFromFS(path, h)
-			})
+			data, err := abox.String(path)
+			if err == nil {
+				assets[path] = data
+				r.GET(path, func(c *gin.Context) {
+					c.FileFromFS(path, h)
+				})
+			}
 		}
 		return nil
 	})
@@ -93,15 +113,25 @@ func InitAssetsTemplates(r *gin.Engine, tbox, abox *rice.Box) error {
 }
 
 func main() {
-	twitch := NewTwitchClient()
+	broadcaster := NewTwitchClient(TwitchClientOpts{
+		Scopes:  DEFAULT_APP_SCOPES,
+		Purpose: "broadcaster",
+	})
+	bot := NewTwitchClient(TwitchClientOpts{
+		Scopes:  DEFAULT_APP_SCOPES,
+		Purpose: "bot",
+	})
+	bot.Scopes = strings.Split(DEFAULT_BOT_SCOPES, ",")
 	rcon := NewRconClient()
+	ircbot := NewIRCBot(bot)
+	ircbot.RconClient = rcon
 	tbox := rice.MustFindBox("templates")
 	abox := rice.MustFindBox("assets")
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
 	if err := InitAssetsTemplates(r, tbox, abox); err != nil {
-		log.Fatal(err)
+		log.Fatalf("cannot init templates: %s", err)
 	}
 
 	csrf_buf := make([]byte, 16)
@@ -126,15 +156,36 @@ func main() {
 			return
 		}
 
-		if p.State != csrf {
+		u, err := url.ParseQuery(p.State)
+		if err != nil {
+			c.AbortWithError(http.StatusBadRequest, err)
+			return
+		}
+
+		user_csrf_token := u.Get("csrf_token")
+		if user_csrf_token != csrf {
 			c.AbortWithStatusJSON(http.StatusOK, gin.H{
 				"error": "bad_csrf",
 			})
 			return
 		}
 
-		twitch.Token = p.Token
-		err := twitch.Prepare(c.Request.Context())
+		var twitch_impl *TwitchClient
+		user_purpose := u.Get("purpose")
+		switch user_purpose {
+		case "bot":
+			twitch_impl = bot
+		case "broadcaster":
+			twitch_impl = broadcaster
+		default:
+			c.AbortWithStatusJSON(http.StatusOK, gin.H{
+				"error": "no_purpose",
+			})
+			return
+		}
+
+		twitch_impl.Token = p.Token
+		err = twitch_impl.Prepare(c.Request.Context())
 
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusOK, gin.H{
@@ -145,6 +196,125 @@ func main() {
 		}
 
 		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	loadScript := func(c *gin.Context) error {
+		var p struct {
+			Script string `form:"script"`
+		}
+
+		if err := c.ShouldBind(&p); err != nil {
+			c.AbortWithError(http.StatusBadRequest, err)
+			return err
+		}
+
+		script := strings.TrimSpace(p.Script)
+		if script == "" {
+			script = assets["default.anko"]
+		}
+
+		err = ircbot.LoadScript(script)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusOK, gin.H{
+				"error":       "script_error",
+				"description": err.Error(),
+			})
+			return err
+		}
+		return nil
+	}
+
+	r.POST("/loadscript", func(c *gin.Context) {
+		err := loadScript(c)
+		if err != nil {
+			return
+		}
+		c.Redirect(http.StatusFound, "/")
+	})
+
+	r.POST("/connect", func(c *gin.Context) {
+		var p struct {
+			CSRF    string `form:"csrf"`
+			Token   string `form:"token"`
+			Purpose string `form:"purpose"`
+		}
+
+		if err := c.ShouldBind(&p); err != nil {
+			c.AbortWithError(http.StatusBadRequest, err)
+			return
+		}
+
+		if p.CSRF != csrf {
+			c.AbortWithStatusJSON(http.StatusOK, gin.H{
+				"error": "bad_csrf",
+			})
+			return
+		}
+
+		var twitch_impl *TwitchClient
+		switch p.Purpose {
+		case "bot":
+			twitch_impl = bot
+		case "broadcaster":
+			twitch_impl = broadcaster
+		default:
+			c.AbortWithStatusJSON(http.StatusOK, gin.H{
+				"error": "no_purpose",
+			})
+			return
+		}
+
+		if p.Token != "" {
+			twitch_impl.Token = p.Token
+			err = twitch_impl.Prepare(c.Request.Context())
+			if err != nil {
+				twitch_impl.Token = ""
+			} else {
+				c.Redirect(http.StatusFound, "/")
+				return
+			}
+		}
+
+		c.Redirect(http.StatusFound, twitch_impl.GetAuthLink("http://localhost:8666/oauth", p.CSRF))
+	})
+
+	r.GET("/alerts", func(c *gin.Context) {
+		c.HTML(http.StatusOK, "alerts.html", nil)
+	})
+
+	r.POST("/startbot", func(c *gin.Context) {
+		err := loadScript(c)
+		if err != nil {
+			return
+		}
+
+		if bot.BroadcasterID == 0 {
+			c.AbortWithStatusJSON(http.StatusOK, gin.H{
+				"error": "no_bot_token",
+			})
+			return
+		}
+
+		if broadcaster.BroadcasterID == 0 {
+			c.AbortWithStatusJSON(http.StatusOK, gin.H{
+				"error": "no_broadcaster_token",
+			})
+			return
+		}
+
+		ircbot.AdminName = broadcaster.Login
+		ircbot.UserName = bot.Login
+		ircbot.ChannelName = broadcaster.Login
+
+		err = ircbot.Start()
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusOK, gin.H{
+				"error":       "irc_error",
+				"description": err.Error(),
+			})
+			return
+		}
+		c.Redirect(http.StatusFound, "/")
 	})
 
 	r.POST("/rundoom", func(c *gin.Context) {
@@ -213,9 +383,11 @@ func main() {
 
 	r.GET("/", func(c *gin.Context) {
 		c.HTML(http.StatusOK, "index.html", gin.H{
-			"CSRF":   csrf,
-			"Twitch": twitch,
-			"Rcon":   rcon,
+			"CSRF":      csrf,
+			"Twitch":    broadcaster,
+			"TwitchBot": bot,
+			"Rcon":      rcon,
+			"IRCBot":    ircbot,
 		})
 	})
 

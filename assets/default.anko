@@ -1,0 +1,51 @@
+cmd_echo = func(flds...) {
+  reply("echo for %q: %q", from, join(flds, " "))
+}
+
+cmd_rcon = func(flds...) {
+  if from != admin {
+    reply("Forbidden, %q != %q.", from, admin)
+  } else {
+    rcon(join(flds, " "))
+  }
+}
+
+cmd_balance = func() {
+  reply("You have %d credits.", balance(from))
+}
+
+func redeem(price, cmd) {
+  return func(args...) {
+    b = balance(from)
+    if b < price {
+      reply("You have %d credits, but this command requires %d.", balance(from), price)
+    }
+    result = cmd(args...)
+    if result {
+      set_balance(from, b - price)
+    }
+  }
+}
+
+cmd_imp = redeem(10, func() {
+  if rcon("summon HereticImp") {
+    reply("%s has summoned an imp!", from)
+  }
+})
+
+cmd_flask = redeem(5, func() {
+  if rcon("summon ArtiHealth") {
+    reply("%s, thank you!", from)
+  }
+})
+
+cmd_something = redeem(5, func() {
+  if ! rate(from, 4) {
+    reply("You are too impatient, %s!", from)
+    return
+  }
+  thing = roll(1.0, "ArtiHealth", 2.0, "ArtiEgg")
+  if rcon("summon " + thing) {
+    reply("%s has summoned an %s", from, thing)
+  }
+})

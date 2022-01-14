@@ -17,21 +17,32 @@ import (
 
 const HELIX_REWARDS = "https://api.twitch.tv/helix/channel_points/custom_rewards"
 const APP_ID = "ehx3943o3ttw0nplenassv0pme8yvb"
-const APP_SCOPES = "channel:manage:redemptions"
+const DEFAULT_APP_SCOPES = "channel:manage:redemptions"
+const DEFAULT_BOT_SCOPES = "chat:read,chat:edit"
 
 type TwitchClient struct {
 	Token         string
+	Login         string
 	BroadcasterID int64
 	ExpiresAt     time.Time
+	Scopes        []string
+	Purpose       string
 
 	h *http.Client
 }
 
-func NewTwitchClient() *TwitchClient {
+type TwitchClientOpts struct {
+	Scopes  string
+	Purpose string
+}
+
+func NewTwitchClient(opts TwitchClientOpts) *TwitchClient {
 	return &TwitchClient{
 		h: &http.Client{
 			Timeout: 10 * time.Second,
 		},
+		Scopes:  strings.Split(opts.Scopes, ","),
+		Purpose: opts.Purpose,
 	}
 }
 
@@ -62,18 +73,21 @@ func (e APIError) Error() string {
 	return b.String()
 }
 
-func (c *TwitchClient) GetAuthLink(redirect_url, state string) string {
+func (c *TwitchClient) GetAuthLink(redirect_url, csrf_token string) string {
 	u := &url.URL{
 		Scheme: "https",
 		Host:   "id.twitch.tv",
 		Path:   "/oauth2/authorize",
 	}
+	v := &url.Values{}
+	v.Set("csrf_token", csrf_token)
+	v.Set("purpose", c.Purpose)
 	u.RawQuery = (&url.Values{
 		"client_id":     []string{APP_ID},
 		"redirect_uri":  []string{redirect_url},
 		"response_type": []string{"token"},
-		"scope":         []string{APP_SCOPES},
-		"state":         []string{state},
+		"scope":         []string{strings.Join(c.Scopes, " ")},
+		"state":         []string{v.Encode()},
 	}).Encode()
 
 	return u.String()
@@ -252,7 +266,7 @@ func (c *TwitchClient) Prepare(ctx context.Context) error {
 	m1 := make(map[string]bool)
 	m2 := make(map[string]bool)
 
-	for _, s := range strings.Split(APP_SCOPES, ",") {
+	for _, s := range c.Scopes {
 		m1[s] = true
 	}
 	for _, s := range v.Scopes {
@@ -266,6 +280,7 @@ func (c *TwitchClient) Prepare(ctx context.Context) error {
 
 	c.BroadcasterID = v.UserID
 	c.ExpiresAt = time.Now().Add(time.Second * time.Duration(v.ExpiresIn))
+	c.Login = v.Login
 
 	return nil
 }

@@ -10,16 +10,54 @@
     <script type="text/javascript" src="app.js"></script>
     <p id="twitch">
     {{ if .Twitch.BroadcasterID }}
-      Hello, Broadcaster {{ .Twitch.BroadcasterID }}.
+      Hello, Broadcaster {{ .Twitch.BroadcasterID }} ( {{ .Twitch.Login }} ).
+      <form action="/connect" method="POST">
+	<input type="hidden" name="token" class="saveme" data-name="broadcaster_token" value="{{ .Twitch.Token }}" />
+      </form>
     {{ else }}
       Twitch API is not connected.
-      <a href="{{ .Twitch.GetAuthLink "http://localhost:8666/oauth" .CSRF }}" rel="noreferer nofollow noopener external">connect</a>
+      <form action="/connect" method="POST">
+	<input type="submit" value="connect" />
+	<input type="hidden" name="csrf" value="{{ .CSRF }}" />
+	<input type="hidden" name="token" class="saveme" data-name="broadcaster_token" value="{{ .Twitch.Token }}" data-autosubmit="true" />
+	<input type="hidden" name="purpose" value="broadcaster" />
+      </form>
+    {{ end }}
+    </p>
+
+    <p id="twitch_bot">
+    {{ if .TwitchBot.BroadcasterID }}
+      Hello, Bot {{ .TwitchBot.BroadcasterID }} ( {{ .TwitchBot.Login }} ).
+      <form action="/connect" method="POST">
+	<input type="hidden" name="token" class="saveme" data-name="bot_token" value="{{ .TwitchBot.Token }}" />
+      </form>
+      {{ if .IRCBot.IsOnline }}
+      <form method="POST" action="/loadscript">
+	<textarea rows="20" cols="80" name="script" class="saveme" data-name="script">{{ .IRCBot.Script }}</textarea>
+	<br />
+	<input type="submit" value="Update script" />
+      </form>
+      {{ else }}
+      <form method="POST" action="/startbot">
+	<textarea rows="20" cols="80" name="script" class="saveme" data-name="script"></textarea>
+	<br />
+	<input type="submit" value="Start bot" />
+      </form>
+      {{ end }}
+    {{ else }}
+      Twitch API for the bot is not connected.
+      <form action="/connect" method="POST">
+	<input type="submit" value="connect" />
+	<input type="hidden" name="csrf" value="{{ .CSRF }}" />
+	<input type="hidden" name="token" class="saveme" data-name="bot_token" value="{{ .TwitchBot.Token }}" data-autosubmit="true" />
+	<input type="hidden" name="purpose" value="bot" />
+      </form>
     {{ end }}
     </p>
 
     <p>
       <form method="POST" action="/rundoom">
-	 Doom executable path: <input name="path" value="" /><br />
+	 Doom executable path: <input name="path" value="" class="saveme" data-name="doomexe" /><br />
         <input type="submit" value="Run" />
       </form>
     </p>
@@ -27,7 +65,7 @@
     <p>
       <form method="POST" action="/rcon/config">
         RCON address: <input name="addr" value="{{ .Rcon.Addr }}" /><br />
-        RCON password: <input name="password" type="password" value="{{ .Rcon.Password }}" /><br />
+        RCON password: <input name="password" type="password" value="{{ .Rcon.Password }}" class="saveme" data-name="rconpswd" /><br />
         <input type="submit" value="Set" />
       </form>
 
