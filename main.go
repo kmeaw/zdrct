@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -18,6 +19,7 @@ import (
 	"github.com/GeertJohan/go.rice"
 	"github.com/gin-gonic/contrib/renders/multitemplate"
 	"github.com/gin-gonic/gin"
+	"golang.org/x/net/websocket"
 )
 
 var assets = make(map[string]string)
@@ -125,6 +127,8 @@ func main() {
 	rcon := NewRconClient()
 	ircbot := NewIRCBot(bot)
 	ircbot.RconClient = rcon
+	alerter := NewAlerter()
+	ircbot.Alerter = alerter
 	tbox := rice.MustFindBox("templates")
 	abox := rice.MustFindBox("assets")
 
@@ -140,6 +144,11 @@ func main() {
 		log.Fatalf("cannot read random bytes: %s", err)
 	}
 	csrf := base64.RawURLEncoding.EncodeToString(csrf_buf)
+
+	err = InitSound()
+	if err != nil {
+		log.Fatalf("cannot start sound system: %s", err)
+	}
 
 	r.GET("/oauth", func(c *gin.Context) {
 		c.HTML(http.StatusOK, "oauth.html", nil)
@@ -280,6 +289,27 @@ func main() {
 
 	r.GET("/alerts", func(c *gin.Context) {
 		c.HTML(http.StatusOK, "alerts.html", nil)
+	})
+
+	r.GET("/alerts/ws", func(c *gin.Context) {
+		handler := websocket.Handler(func(ws *websocket.Conn) {
+			defer ws.Close()
+			enc := json.NewEncoder(ws)
+			ch := alerter.Subscribe()
+			for {
+				select {
+				case <-c.Request.Context().Done():
+					return
+				case alert := <-ch:
+					err := enc.Encode(alert)
+					if err != nil {
+						log.Printf("cannot send alert: %s", err)
+						return
+					}
+				}
+			}
+		})
+		handler.ServeHTTP(c.Writer, c.Request)
 	})
 
 	r.POST("/startbot", func(c *gin.Context) {

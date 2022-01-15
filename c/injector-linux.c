@@ -74,6 +74,9 @@ void __attribute__((constructor)) do_inject () {
     printf("Printf = %p\n", printf_ptr);
     printf("C_DoCommand = %p\n", cdocommand_ptr);
 
+    if (cdocommand_ptr == NULL)
+        goto fail;
+
     char *stack = mmap(NULL, STACK_SIZE, PROT_READ | PROT_WRITE,
                        MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK, -1, 0);
     if (!stack) {
@@ -88,6 +91,8 @@ void __attribute__((constructor)) do_inject () {
     }
 
     printf("Running thread %d.\n", pid);
+    unsetenv("LD_PRELOAD");
 
+fail:
     close(memfd);
 }

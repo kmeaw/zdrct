@@ -1,0 +1,12 @@
+#msg {
+	position: absolute;
+	left: 40px;
+	top: 40px;
+	background: #aaa;
+	align: center;
+}
+
+#text {
+	color: #fff;
+	font-size: 20px;
+}

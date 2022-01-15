@@ -4,6 +4,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"syscall"
@@ -43,6 +45,70 @@ var shellcode = []byte{
 	0x53, 0xFF, 0xD2, // GetProcAddress("LoadLibraryW")
 	0x83, 0xC4, 0x18, // restore stack
 	0xFF, 0xE0, // jmp LoadLibraryW(arg0)
+}
+
+var sounds map[string]string
+var mciSendString *windows.LazyProc
+var mciGetErrorString *windows.LazyProc
+
+func InitSound() error {
+	winmm := windows.NewLazySystemDLL("winmm.dll")
+	err := winmm.Load()
+	if err != nil {
+		return err
+	}
+
+	mciSendString = winmm.NewProc("mciSendStringW")
+	err = mciSendString.Find()
+	if err != nil {
+		return err
+	}
+
+	mciGetErrorString = winmm.NewProc("mciGetErrorStringA")
+	err = mciGetErrorString.Find()
+	if err != nil {
+		return fmt.Errorf("cannot resolve mciGetErrorString: %w", err)
+	}
+
+	sounds = make(map[string]string)
+
+	return nil
+}
+
+func PlaySound(filename string) error {
+	// TODO: protect sounds
+	name := sounds[filename]
+	if name == "" {
+		name = base64.RawURLEncoding.EncodeToString([]byte(filename))
+		sounds[filename] = name
+		mciSendString.Call(
+			uintptr(unsafe.Pointer(S("open assets\\"+filename+" type mpegvideo alias "+name))),
+			0,
+			0,
+			0,
+		)
+	}
+	ret, _, _ := mciSendString.Call(
+		uintptr(unsafe.Pointer(S("play "+name))),
+		0,
+		0,
+		0,
+	)
+	if ret != 0 {
+		errbuf := make([]byte, 4096)
+		mciGetErrorString.Call(
+			uintptr(ret),
+			uintptr(unsafe.Pointer(&errbuf[0])),
+			uintptr(len(errbuf)),
+		)
+		idx := bytes.IndexByte(errbuf, 0)
+		if idx != -1 {
+			errbuf = errbuf[:idx]
+		}
+		return fmt.Errorf("mciSendString failed: %s", errbuf)
+	}
+
+	return nil
 }
 
 func inject(exePath string) error {

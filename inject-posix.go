@@ -20,4 +20,12 @@ func inject(exePath string) error {
 	return cmd.Run()
 }
 
+func InitSound() error {
+	return nil
+}
+
+func PlaySound() {
+	// TODO: implement playsound for posix
+}
+
 // vim: ai:ts=8:sw=8:noet:syntax=go

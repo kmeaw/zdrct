@@ -23,6 +23,7 @@ type IRCBot struct {
 	RconClient  *RconClient
 	Script      string
 	LastBuckets map[string]time.Time
+	Alerter     *Alerter
 
 	crediter *time.Ticker
 	online   bool
@@ -103,13 +104,11 @@ func (b *IRCBot) Handle(c *irc.Client, m *irc.Message) {
 
 		if strings.HasPrefix(flds[0], "!") {
 			cmd := flds[0][1:]
-			/*
-				_, err := b.e.Get("cmd_" + cmd)
-				if err != nil {
-					log.Printf("Unrecognized command: %q: %s", cmd, err)
-					return
-				}
-			*/
+			_, err := b.e.Get("cmd_" + cmd)
+			if err != nil {
+				log.Printf("Unrecognized command: %q: %s", cmd, err)
+				return
+			}
 
 			args := make([]string, 0, len(flds)-1)
 			for _, arg := range flds[1:] {
@@ -117,7 +116,7 @@ func (b *IRCBot) Handle(c *irc.Client, m *irc.Message) {
 			}
 
 			script := fmt.Sprintf("cmd_%s(%s)", cmd, strings.Join(args, ", "))
-			_, err := vm.Execute(b.e, nil, script)
+			_, err = vm.Execute(b.e, nil, script)
 			if err != nil {
 				log.Printf("cannot execute script %q: %s", script, err)
 				return
@@ -191,6 +190,21 @@ func (b *IRCBot) LoadScript(script string) error {
 			return false
 		}
 	}))
+	errors = append(errors, b.e.Define("sleep", func(duration interface{}) {
+		i, ok := duration.(int64)
+		if ok {
+			time.Sleep(time.Duration(i) * time.Second)
+			return
+		}
+
+		f, ok := duration.(float64)
+		if ok {
+			time.Sleep(time.Duration(f) * time.Second)
+			return
+		}
+
+		log.Printf("Bad argument for sleep: %v (%T)", duration, duration)
+	}))
 	errors = append(errors, b.e.Define("join", strings.Join))
 	errors = append(errors, b.e.Define("rcon", func(cmd string) bool {
 		if !b.RconClient.IsOnline() {
@@ -253,6 +267,18 @@ func (b *IRCBot) LoadScript(script string) error {
 			offset = value
 		}
 		return vs[len(vs)-1] // should not happen
+	}))
+	errors = append(errors, b.e.Define("sprintf", fmt.Sprintf))
+	errors = append(errors, b.e.Define("alert", func(text string, args ...string) {
+		alert := AlertEvent{Text: text}
+		switch len(args) {
+		case 2:
+			alert.Sound = args[1]
+			fallthrough
+		case 1:
+			alert.Image = args[0]
+		}
+		b.Alerter.Broadcast(alert)
 	}))
 	for _, err := range errors {
 		if err != nil {
