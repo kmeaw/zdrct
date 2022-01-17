@@ -2,87 +2,31 @@
 <html>
   <head>
     <title>zdrct</title>
+    <link href="/bootstrap.min.css" rel="stylesheet" integrity="sha384-1BmE4kWBq78iYhFldvKuhfTAU6auU8tT94WrHftjDbrCEXSU1oBoqyl2QvZ6jIW3" crossorigin="anonymous" />
+    <link href="/style.css" rel="stylesheet" crossorigin="anonymous" />
   </head>
   <body>
     <script type="text/javascript">
       const BroadcasterID = {{ .BroadcasterID }};
     </script>
     <script type="text/javascript" src="app.js"></script>
-    <p id="twitch">
-    {{ if .Twitch.BroadcasterID }}
-      Hello, Broadcaster {{ .Twitch.BroadcasterID }} ( {{ .Twitch.Login }} ).
-      <form action="/connect" method="POST">
-	<input type="hidden" name="token" class="saveme" data-name="broadcaster_token" value="{{ .Twitch.Token }}" />
-      </form>
-    {{ else }}
-      Twitch API is not connected.
-      <form action="/connect" method="POST">
-	<input type="submit" value="connect" />
-	<input type="hidden" name="csrf" value="{{ .CSRF }}" />
-	<input type="hidden" name="token" class="saveme" data-name="broadcaster_token" value="{{ .Twitch.Token }}" data-autosubmit="true" />
-	<input type="hidden" name="purpose" value="broadcaster" />
-      </form>
-    {{ end }}
-    </p>
+    <nav>
+      <div class="nav nav-tabs" id="nav-tab" role="tablist">
+	<button class="nav-link{{ if eq .Tab "twitch" }} active{{ end }}" id="nav-twitch-tab" data-bs-toggle="tab" data-bs-target="#nav-twitch" type="button" role="tab" aria-controls="nav-twitch" aria-selected="true">Twitch</button>
+	<button class="nav-link{{ if eq .Tab "script" }} active{{ end }}" id="nav-script-tab" data-bs-toggle="tab" data-bs-target="#nav-script" type="button" role="tab" aria-controls="nav-script" aria-selected="false">Script</button>
+	<button class="nav-link{{ if eq .Tab "doomexe" }} active{{ end }}" id="nav-doomexe-tab" data-bs-toggle="tab" data-bs-target="#nav-doomexe" type="button" role="tab" aria-controls="nav-doomexe" aria-selected="false">Doom exe and args</button>
+	<button class="nav-link{{ if eq .Tab "rcon" }} active{{ end }}" id="nav-rcon-tab" data-bs-toggle="tab" data-bs-target="#nav-rcon" type="button" role="tab" aria-controls="nav-rcon" aria-selected="false">RCon</button>
+      </li>
+    </nav>
 
-    <p id="twitch_bot">
-    {{ if .TwitchBot.BroadcasterID }}
-      Hello, Bot {{ .TwitchBot.BroadcasterID }} ( {{ .TwitchBot.Login }} ).
-      <form action="/connect" method="POST">
-	<input type="hidden" name="token" class="saveme" data-name="bot_token" value="{{ .TwitchBot.Token }}" />
-      </form>
-      {{ if .IRCBot.IsOnline }}
-      <form method="POST" action="/loadscript">
-	<textarea rows="20" cols="80" name="script" class="saveme" data-name="script">{{ .IRCBot.Script }}</textarea>
-	<br />
-	<input type="submit" value="Update script" />
-      </form>
-      {{ else }}
-      <form method="POST" action="/startbot">
-	<textarea rows="20" cols="80" name="script" class="saveme" data-name="script"></textarea>
-	<br />
-	<input type="submit" value="Start bot" />
-      </form>
-      {{ end }}
-    {{ else }}
-      Twitch API for the bot is not connected.
-      <form action="/connect" method="POST">
-	<input type="submit" value="connect" />
-	<input type="hidden" name="csrf" value="{{ .CSRF }}" />
-	<input type="hidden" name="token" class="saveme" data-name="bot_token" value="{{ .TwitchBot.Token }}" data-autosubmit="true" />
-	<input type="hidden" name="purpose" value="bot" />
-      </form>
-    {{ end }}
-    </p>
+    <div class="tab-content" id="nav-tabContent">
+      {{ template "_twitch" . }}
+      {{ template "_doomexe" . }}
+      {{ template "_script" . }}
+      {{ template "_rcon" . }}
 
-    <p>
-      <form method="POST" action="/rundoom">
-	 Doom executable path: <input name="path" value="" class="saveme" data-name="doomexe" /><br />
-        <input type="submit" value="Run" />
-      </form>
-    </p>
+    </div>
 
-    <p>
-      <form method="POST" action="/rcon/config">
-        RCON address: <input name="addr" value="{{ .Rcon.Addr }}" /><br />
-        RCON password: <input name="password" type="password" value="{{ .Rcon.Password }}" class="saveme" data-name="rconpswd" /><br />
-        <input type="submit" value="Set" />
-      </form>
-
-      <p>
-        {{ if .Rcon.IsOnline }}
-        online
-        <form method="POST" action="/rcon">
-          test: <input name="command" /> <input type="submit" value="go" />
-        </form>
-        {{ else }}
-        offline
-        {{ end }}
-      </p>
-    </p>
-
-    <p>
-      <ol id="rewards"></ol>
-    </p>
+    <script src="/bootstrap.bundle.min.js" integrity="sha384-ka7Sk0Gln4gmtz2MlQnikT1wXgYsOg+OMhuP+IlRH9sENBO0LRn5q+8nbTov4+1p" crossorigin="anonymous"></script>
   </body>
 </html>

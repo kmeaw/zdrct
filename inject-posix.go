@@ -9,14 +9,22 @@ import (
 	"path"
 )
 
-func inject(exePath string) error {
+func inject(exePath string, args ...string) error {
 	wd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
 
+	dir, file := filepath.Split(exePath)
+	if dir != "" {
+		err := os.Chdir(dir)
+		if err != nil {
+			return err
+		}
+	}
+
 	cmd := exec.Command(exePath)
-	cmd.Env = append(os.Environ(), "LD_PRELOAD="+path.Join(wd, "libinjector.so"))
+	cmd.Env = append(os.Environ(), "LD_PRELOAD="+filepath.Join(wd, "libinjector.so"))
 	return cmd.Run()
 }
 

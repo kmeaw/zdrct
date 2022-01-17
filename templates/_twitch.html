@@ -1,0 +1,31 @@
+<div class="tab-pane fade{{ if eq .Tab "twitch" }} show active{{ end }}" id="nav-twitch" role="tabpanel" aria-labelledby="nav-twitch-tab">
+  {{ if .Twitch.BroadcasterID }}
+    Hello, Broadcaster {{ .Twitch.BroadcasterID }} ( {{ .Twitch.Login }} ).
+    <form action="/connect" method="POST">
+      <input type="hidden" name="token" class="saveme" data-name="broadcaster_token" value="{{ .Twitch.Token }}" />
+    </form>
+  {{ else }}
+    Twitch API is not connected.
+    <form action="/connect" method="POST">
+      <input type="submit" value="connect" />
+      <input type="hidden" name="csrf" value="{{ .CSRF }}" />
+      <input type="hidden" name="token" class="saveme" data-name="broadcaster_token" value="{{ .Twitch.Token }}" data-autosubmit="true" />
+      <input type="hidden" name="purpose" value="broadcaster" />
+    </form>
+  {{ end }}
+
+  {{ if .TwitchBot.BroadcasterID }}
+    Hello, Bot {{ .TwitchBot.BroadcasterID }} ( {{ .TwitchBot.Login }} ).
+    <form action="/connect" method="POST">
+      <input type="hidden" name="token" class="saveme" data-name="bot_token" value="{{ .TwitchBot.Token }}" />
+    </form>
+  {{ else }}
+    Twitch API for the bot is not connected.
+    <form action="/connect" method="POST">
+      <input type="submit" value="connect" />
+      <input type="hidden" name="csrf" value="{{ .CSRF }}" />
+      <input type="hidden" name="token" class="saveme" data-name="bot_token" value="{{ .TwitchBot.Token }}" data-autosubmit="true" />
+      <input type="hidden" name="purpose" value="bot" />
+    </form>
+  {{ end }}
+</div>

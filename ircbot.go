@@ -278,7 +278,25 @@ func (b *IRCBot) LoadScript(script string) error {
 		case 1:
 			alert.Image = args[0]
 		}
+		log.Printf("alert(%q)", text)
 		b.Alerter.Broadcast(alert)
+	}))
+	errors = append(errors, b.e.Define("list_cmds", func() (result []string) {
+		for _, line := range strings.Split(b.e.String(), "\n") {
+			if strings.HasPrefix(line, "cmd_") {
+				kv := strings.SplitN(line, " = ", 2)
+				if len(kv) < 2 {
+					continue
+				}
+
+				result = append(
+					result,
+					strings.TrimPrefix(kv[0], "cmd_"),
+				)
+			}
+		}
+
+		return
 	}))
 	for _, err := range errors {
 		if err != nil {

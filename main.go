@@ -1,70 +1,71 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"html/template"
-	"io/fs"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
-	"github.com/GeertJohan/go.rice"
 	"github.com/gin-gonic/contrib/renders/multitemplate"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/net/websocket"
 )
 
-var assets = make(map[string]string)
-
-func InitAssetsTemplates(r *gin.Engine, tbox, abox *rice.Box) error {
+func InitAssetsTemplates(r *gin.Engine) error {
 	var err error
-	var data string
+	var data []byte
 	var tmpl *template.Template
 
 	var names, pnames []string
 
-	tbox.Walk("", func(path string, info fs.FileInfo, err error) error {
-		if err != nil {
-			return fmt.Errorf("cannot walk over tbox: %w", err)
+	entries, err := os.ReadDir("templates")
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() {
+			continue
 		}
 
-		if path != "" {
-			if strings.HasSuffix(path, ".swp") {
-				return nil
-			}
-
-			if strings.HasPrefix(path, "_") {
-				pnames = append(pnames, path)
-			} else {
-				names = append(names, path)
-			}
+		if strings.HasSuffix(entry.Name(), ".swp") || strings.HasPrefix(entry.Name(), ".") || strings.HasSuffix(entry.Name(), "~") {
+			continue
 		}
-		return nil
-	})
+
+		if strings.HasPrefix(entry.Name(), "_") {
+			pnames = append(pnames, entry.Name())
+		} else {
+			names = append(names, entry.Name())
+		}
+	}
+
+	funcs := template.FuncMap{
+		"join": strings.Join,
+	}
 
 	render := multitemplate.New()
 	ptmpls := make(map[string]*template.Template)
 	for _, pname := range pnames {
-		if strings.HasSuffix(pname, ".swp") || strings.HasPrefix(pname, ".") {
-			continue
-		}
 		pname = filepath.Base(pname)
 		if pname == "templates" {
 			continue
 		}
-		if data, err = tbox.String(pname); err != nil {
+		if data, err = os.ReadFile(filepath.Join("templates", pname)); err != nil {
 			return fmt.Errorf("cannot open %q from tbox while iterating over pnames: %w", pname, err)
 		}
 		pname = strings.TrimSuffix(pname, ".html")
-		if tmpl, err = template.New(pname).Parse(data); err != nil {
+		if tmpl, err = template.New(pname).Funcs(funcs).Parse(string(data)); err != nil {
 			return fmt.Errorf("cannot parse template %q: %w", pname, err)
 		}
 		ptmpls[pname] = tmpl
@@ -74,13 +75,10 @@ func InitAssetsTemplates(r *gin.Engine, tbox, abox *rice.Box) error {
 		if name == "templates" {
 			continue
 		}
-		if strings.HasSuffix(name, ".swp") || strings.HasPrefix(name, ".") {
-			continue
-		}
-		if data, err = tbox.String(name); err != nil {
+		if data, err = os.ReadFile(filepath.Join("templates", name)); err != nil {
 			return fmt.Errorf("cannot open %q from tbox while iterating over names: %w", name, err)
 		}
-		if tmpl, err = template.New(name).Parse(data); err != nil {
+		if tmpl, err = template.New(name).Funcs(funcs).Parse(string(data)); err != nil {
 			return fmt.Errorf("cannot parse template %q: %w", name, err)
 		}
 		for pname, ptmpl := range ptmpls {
@@ -90,31 +88,39 @@ func InitAssetsTemplates(r *gin.Engine, tbox, abox *rice.Box) error {
 	}
 	r.HTMLRender = render
 
-	h := abox.HTTPBox()
-	abox.Walk("", func(path string, info fs.FileInfo, err error) error {
-		if err != nil {
-			return fmt.Errorf("cannot walk over abox: %w", err)
+	entries, err = os.ReadDir("assets")
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() {
+			continue
 		}
 
-		if strings.HasSuffix(path, ".swp") {
-			return nil
+		if strings.HasSuffix(entry.Name(), ".swp") || strings.HasPrefix(entry.Name(), ".") || strings.HasSuffix(entry.Name(), "~") {
+			continue
 		}
 
-		if path != "" {
-			data, err := abox.String(path)
-			if err == nil {
-				assets[path] = data
-				r.GET(path, func(c *gin.Context) {
-					c.FileFromFS(path, h)
-				})
-			}
-		}
-		return nil
-	})
+		name := entry.Name()
+
+		r.GET(name, func(c *gin.Context) {
+			c.File(filepath.Join("assets", name))
+		})
+	}
 	return nil
 }
 
 func main() {
+	if len(os.Args) > 0 {
+		dir, _ := filepath.Split(os.Args[0])
+		if dir != "" {
+			err := os.Chdir(dir)
+			if err != nil {
+				log.Fatalf("cannot cd into %q: %s", dir, err)
+			}
+		}
+	}
+
 	broadcaster := NewTwitchClient(TwitchClientOpts{
 		Scopes:  DEFAULT_APP_SCOPES,
 		Purpose: "broadcaster",
@@ -129,12 +135,10 @@ func main() {
 	ircbot.RconClient = rcon
 	alerter := NewAlerter()
 	ircbot.Alerter = alerter
-	tbox := rice.MustFindBox("templates")
-	abox := rice.MustFindBox("assets")
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
-	if err := InitAssetsTemplates(r, tbox, abox); err != nil {
+	if err := InitAssetsTemplates(r); err != nil {
 		log.Fatalf("cannot init templates: %s", err)
 	}
 
@@ -144,6 +148,32 @@ func main() {
 		log.Fatalf("cannot read random bytes: %s", err)
 	}
 	csrf := base64.RawURLEncoding.EncodeToString(csrf_buf)
+
+	config := &Config{}
+	err = config.Init()
+	if err != nil {
+		log.Fatalf("cannot init config system: %s", err)
+	}
+	err = config.Load()
+	if err != nil {
+		log.Fatalf("error loading config file: %s", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	broadcaster.Token = config.BroadcasterToken
+	if err := broadcaster.Prepare(ctx); err != nil {
+		broadcaster.Token = ""
+		config.BroadcasterToken = ""
+	}
+	bot.Token = config.BotToken
+	if err := bot.Prepare(ctx); err != nil {
+		bot.Token = ""
+		config.BotToken = ""
+	}
+	cancel()
+
+	rcon.Addr, _ = net.ResolveUDPAddr("udp", config.RconAddress)
+	rcon.Password = config.RconPassword
 
 	err = InitSound()
 	if err != nil {
@@ -219,7 +249,7 @@ func main() {
 
 		script := strings.TrimSpace(p.Script)
 		if script == "" {
-			script = assets["default.anko"]
+			script = config.Script
 		}
 
 		err = ircbot.LoadScript(script)
@@ -230,6 +260,12 @@ func main() {
 			})
 			return err
 		}
+
+		config.Script = script
+		if err := config.Save(); err != nil {
+			log.Printf("cannot save config: %s", err)
+		}
+
 		return nil
 	}
 
@@ -238,7 +274,7 @@ func main() {
 		if err != nil {
 			return
 		}
-		c.Redirect(http.StatusFound, "/")
+		c.Redirect(http.StatusFound, "/?tab=script")
 	})
 
 	r.POST("/connect", func(c *gin.Context) {
@@ -279,9 +315,15 @@ func main() {
 			if err != nil {
 				twitch_impl.Token = ""
 			} else {
-				c.Redirect(http.StatusFound, "/")
+				c.Redirect(http.StatusFound, "/?tab=twitch")
 				return
 			}
+		}
+
+		config.BroadcasterToken = broadcaster.Token
+		config.BotToken = bot.Token
+		if err := config.Save(); err != nil {
+			log.Printf("cannot save config: %s", err)
 		}
 
 		c.Redirect(http.StatusFound, twitch_impl.GetAuthLink("http://localhost:8666/oauth", p.CSRF))
@@ -344,12 +386,13 @@ func main() {
 			})
 			return
 		}
-		c.Redirect(http.StatusFound, "/")
+		c.Redirect(http.StatusFound, "/?tab=script")
 	})
 
 	r.POST("/rundoom", func(c *gin.Context) {
 		var p struct {
 			Path string `form:"path"`
+			Args string `form:"args"`
 		}
 
 		if err := c.ShouldBind(&p); err != nil {
@@ -357,12 +400,41 @@ func main() {
 			return
 		}
 
-		err := inject(p.Path)
+		var args []string
+		for _, line := range strings.Split(p.Args, "\n") {
+			line = strings.TrimSpace(line)
+			if len(line) == 0 {
+				continue
+			}
+			if line[0] == '#' {
+				continue
+			}
+
+			if line[0] == '-' || line[0] == '+' {
+				idx := strings.IndexRune(line, ' ')
+				if idx == -1 {
+					args = append(args, line)
+				} else {
+					args = append(args, line[0:idx], line[idx+1:])
+				}
+			} else {
+				args = append(args, line)
+			}
+		}
+
+		err := inject(p.Path, args...)
 		if err != nil {
 			c.HTML(http.StatusOK, "error.html", gin.H{"Error": err.Error()})
 			return
 		}
-		c.Redirect(http.StatusFound, "/")
+
+		config.DoomExe = p.Path
+		config.DoomArgs = p.Args
+		if err := config.Save(); err != nil {
+			log.Printf("cannot save config: %s", err)
+		}
+
+		c.Redirect(http.StatusFound, "/?tab=doomexe")
 	})
 
 	r.POST("/rcon/config", func(c *gin.Context) {
@@ -384,7 +456,13 @@ func main() {
 			return
 		}
 
-		c.Redirect(http.StatusFound, "/")
+		config.RconAddress = p.Addr
+		config.RconPassword = p.Password
+		if err := config.Save(); err != nil {
+			log.Printf("cannot save config: %s", err)
+		}
+
+		c.Redirect(http.StatusFound, "/?tab=rcon")
 	})
 
 	r.POST("/rcon", func(c *gin.Context) {
@@ -408,16 +486,22 @@ func main() {
 			return
 		}
 
-		c.Redirect(http.StatusFound, "/")
+		c.Redirect(http.StatusFound, "/?tab=rcon")
 	})
 
 	r.GET("/", func(c *gin.Context) {
+		tab := c.Query("tab")
+		if tab == "" {
+			tab = "twitch"
+		}
 		c.HTML(http.StatusOK, "index.html", gin.H{
 			"CSRF":      csrf,
 			"Twitch":    broadcaster,
 			"TwitchBot": bot,
 			"Rcon":      rcon,
 			"IRCBot":    ircbot,
+			"Tab":       tab,
+			"Config":    config,
 		})
 	})
 

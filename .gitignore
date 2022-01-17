@@ -1,3 +1,7 @@
 .*.sw[ponm]
 zdrct
 zdrct.exe
+.*~
+*~
+libinjector*.dll
+libinjector*.so

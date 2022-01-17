@@ -1,7 +1,7 @@
 'use strict';
 
 window.addEventListener('DOMContentLoaded', (event) => {
-	const conn = new WebSocket("ws://" + location.host + "/alerts/ws");
+	let conn = new WebSocket("ws://" + location.host + "/alerts/ws");
 	const $connecting = document.getElementById("connecting");
 	const $msg = document.getElementById("msg");
 	const $img = document.getElementById("img");
@@ -34,14 +34,14 @@ window.addEventListener('DOMContentLoaded', (event) => {
 
 	conn.addEventListener('close', (event) => {
 		setTimeout(() => {
-			window.location.reload();
+			conn = new WebSocket("ws://" + location.host + "/alerts/ws");
 		}, 5000);
 	});	
 
 	conn.addEventListener('error', (event) => {
 		console.error(event);
 		setTimeout(() => {
-			window.location.reload();
+			conn = new WebSocket("ws://" + location.host + "/alerts/ws");
 		}, 5000);
 	});	
 });

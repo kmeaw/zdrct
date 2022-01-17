@@ -8,6 +8,9 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -111,9 +114,22 @@ func PlaySound(filename string) error {
 	return nil
 }
 
-func inject(exePath string) error {
+func inject(exePath string, args ...string) error {
+	wd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+
+	dir, file := filepath.Split(exePath)
+	if dir != "" {
+		err := os.Chdir(dir)
+		if err != nil {
+			return err
+		}
+	}
+
 	kernel32 := windows.NewLazySystemDLL("kernel32.dll")
-	err := kernel32.Load()
+	err = kernel32.Load()
 	if err != nil {
 		return err
 	}
@@ -142,7 +158,7 @@ func inject(exePath string) error {
 	var pi windows.ProcessInformation
 	err = windows.CreateProcess(
 		nil,
-		S(exePath),
+		S(strings.Join(append([]string{file}, args...), " ")),
 		nil, nil, false,
 		windows.CREATE_SUSPENDED,
 		nil,
@@ -169,9 +185,9 @@ func inject(exePath string) error {
 
 	var libinjector_name string
 	if isWow64 {
-		libinjector_name = "libinjector32.dll"
+		libinjector_name = filepath.Join(wd, "libinjector32.dll")
 	} else {
-		libinjector_name = "libinjector64.dll"
+		libinjector_name = filepath.Join(wd, "libinjector64.dll")
 	}
 
 	log.Printf("libinjector is %q", libinjector_name)

@@ -1,0 +1,20 @@
+      <div class="tab-pane fade{{ if eq .Tab "rcon" }} show active{{ end }}" id="nav-rcon" role="tabpanel" aria-labelledby="nav-rcon-tab">
+	<form method="POST" action="/rcon/config">
+	  RCON address: <input name="addr" value="{{ .Rcon.Addr }}" /><br />
+	  RCON password: <input name="password" type="password" value="{{ .Rcon.Password }}" class="saveme" data-name="rconpswd" /><br />
+	  <input type="submit" value="Set" />
+	</form>
+
+	<p>
+	  {{ if .Rcon.IsOnline }}
+	  online
+	  <form method="POST" action="/rcon">
+	    test: <input name="command" /> <input type="submit" value="go" />
+	  </form>
+	  {{ else }}
+	  offline
+	  {{ end }}
+	</p>
+      </p>
+      </div>
+
