@@ -19,6 +19,7 @@ extern int rconserver(void*);
 
 static void* scan(const char *perm_filter, void*(*cb)(void *, size_t, void *), void *uptr) {
     void *ptr = NULL;
+    const char *pscan;
     FILE *file = fopen("/proc/self/maps", "r");
     if (file == NULL) {
         perror("fopen");
@@ -42,7 +43,11 @@ static void* scan(const char *perm_filter, void*(*cb)(void *, size_t, void *), v
 
         if (!strcmp(dev, "00:00")) break;
 
-        if (strcmp(perm, perm_filter)) continue;
+        for(pscan = perm_filter; *pscan; pscan++) {
+            if(*pscan != '-' && perm[pscan - perm_filter] != *pscan)
+                break;
+        }
+        if (*pscan) continue;
         off_t map_from, map_to;
         if (sscanf(line, "%lx-%lx", &map_from, &map_to) != 2) continue;
         ptr = cb((void *) map_from, (size_t) (map_to - map_from), uptr);

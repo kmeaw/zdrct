@@ -1,13 +1,13 @@
 #include <stdio.h>
 #include <string.h>
 #ifdef WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <winsock2.h>
+# define WIN32_LEAN_AND_MEAN
+# include <winsock2.h>
 typedef int socklen_t;
 #else
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <errno.h>
+# include <sys/socket.h>
+# include <netinet/in.h>
+# include <errno.h>
 #endif
 
 #ifdef WIN32
