@@ -5,8 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
-	"html/template"
 	"log"
 	"net"
 	"net/http"
@@ -18,97 +16,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/contrib/renders/multitemplate"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/net/websocket"
 )
-
-func InitAssetsTemplates(r *gin.Engine) error {
-	var err error
-	var data []byte
-	var tmpl *template.Template
-
-	var names, pnames []string
-
-	entries, err := os.ReadDir("templates")
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if !entry.Type().IsRegular() {
-			continue
-		}
-
-		if strings.HasSuffix(entry.Name(), ".swp") || strings.HasPrefix(entry.Name(), ".") || strings.HasSuffix(entry.Name(), "~") {
-			continue
-		}
-
-		if strings.HasPrefix(entry.Name(), "_") {
-			pnames = append(pnames, entry.Name())
-		} else {
-			names = append(names, entry.Name())
-		}
-	}
-
-	funcs := template.FuncMap{
-		"join": strings.Join,
-	}
-
-	render := multitemplate.New()
-	ptmpls := make(map[string]*template.Template)
-	for _, pname := range pnames {
-		pname = filepath.Base(pname)
-		if pname == "templates" {
-			continue
-		}
-		if data, err = os.ReadFile(filepath.Join("templates", pname)); err != nil {
-			return fmt.Errorf("cannot open %q from tbox while iterating over pnames: %w", pname, err)
-		}
-		pname = strings.TrimSuffix(pname, ".html")
-		if tmpl, err = template.New(pname).Funcs(funcs).Parse(string(data)); err != nil {
-			return fmt.Errorf("cannot parse template %q: %w", pname, err)
-		}
-		ptmpls[pname] = tmpl
-	}
-	for _, name := range names {
-		name = filepath.Base(name)
-		if name == "templates" {
-			continue
-		}
-		if data, err = os.ReadFile(filepath.Join("templates", name)); err != nil {
-			return fmt.Errorf("cannot open %q from tbox while iterating over names: %w", name, err)
-		}
-		if tmpl, err = template.New(name).Funcs(funcs).Parse(string(data)); err != nil {
-			return fmt.Errorf("cannot parse template %q: %w", name, err)
-		}
-		for pname, ptmpl := range ptmpls {
-			tmpl.AddParseTree(pname, ptmpl.Tree)
-		}
-		render.Add(name, tmpl)
-	}
-	r.HTMLRender = render
-
-	entries, err = os.ReadDir("assets")
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if !entry.Type().IsRegular() {
-			continue
-		}
-
-		if strings.HasSuffix(entry.Name(), ".swp") || strings.HasPrefix(entry.Name(), ".") || strings.HasSuffix(entry.Name(), "~") {
-			continue
-		}
-
-		name := entry.Name()
-
-		r.GET(name, func(c *gin.Context) {
-			c.File(filepath.Join("assets", name))
-		})
-	}
-	return nil
-}
 
 func main() {
 	if len(os.Args) > 0 {
@@ -136,21 +46,8 @@ func main() {
 	alerter := NewAlerter()
 	ircbot.Alerter = alerter
 
-	gin.SetMode(gin.ReleaseMode)
-	r := gin.Default()
-	if err := InitAssetsTemplates(r); err != nil {
-		log.Fatalf("cannot init templates: %s", err)
-	}
-
-	csrf_buf := make([]byte, 16)
-	_, err := rand.Read(csrf_buf)
-	if err != nil {
-		log.Fatalf("cannot read random bytes: %s", err)
-	}
-	csrf := base64.RawURLEncoding.EncodeToString(csrf_buf)
-
 	config := &Config{}
-	err = config.Init()
+	err := config.Init()
 	if err != nil {
 		log.Fatalf("cannot init config system: %s", err)
 	}
@@ -158,6 +55,19 @@ func main() {
 	if err != nil {
 		log.Fatalf("error loading config file: %s", err)
 	}
+
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.Default()
+	if err := config.InitAssetsTemplates(r); err != nil {
+		log.Fatalf("cannot init templates: %s", err)
+	}
+
+	csrf_buf := make([]byte, 16)
+	_, err = rand.Read(csrf_buf)
+	if err != nil {
+		log.Fatalf("cannot read random bytes: %s", err)
+	}
+	csrf := base64.RawURLEncoding.EncodeToString(csrf_buf)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	broadcaster.Token = config.BroadcasterToken

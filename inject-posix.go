@@ -6,7 +6,7 @@ package main
 import (
 	"os"
 	"os/exec"
-	"path"
+	"path/filepath"
 )
 
 func inject(exePath string, args ...string) error {
@@ -15,7 +15,7 @@ func inject(exePath string, args ...string) error {
 		return err
 	}
 
-	dir, file := filepath.Split(exePath)
+	dir, _ := filepath.Split(exePath)
 	if dir != "" {
 		err := os.Chdir(dir)
 		if err != nil {
@@ -32,7 +32,7 @@ func InitSound() error {
 	return nil
 }
 
-func PlaySound() {
+func PlaySound(_ string) {
 	// TODO: implement playsound for posix
 }
 

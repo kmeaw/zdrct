@@ -3,9 +3,15 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"html/template"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/gin-gonic/contrib/renders/multitemplate"
+	"github.com/gin-gonic/gin"
 )
 
 type Config struct {
@@ -141,7 +147,7 @@ func (c *Config) LoadScript() error {
 	return nil
 }
 
-func (c *Config) Save() error {
+func (c Config) Save() error {
 	for _, fn := range []func() error{c.SaveConfig, c.SaveScript} {
 		err := fn()
 		if err != nil {
@@ -151,7 +157,7 @@ func (c *Config) Save() error {
 	return nil
 }
 
-func (c *Config) SaveConfig() error {
+func (c Config) SaveConfig() error {
 	f, err := os.OpenFile(filepath.Join(c.zdrctConfigDir, "config.json"), os.O_CREATE|os.O_RDWR, 0666)
 	if err != nil {
 		return err
@@ -168,7 +174,7 @@ func (c *Config) SaveConfig() error {
 	return nil
 }
 
-func (c *Config) SaveScript() error {
+func (c Config) SaveScript() error {
 	f, err := os.OpenFile(filepath.Join(c.zdrctConfigDir, "script.anko"), os.O_CREATE|os.O_RDWR, 0666)
 	if err != nil {
 		return err
@@ -180,6 +186,114 @@ func (c *Config) SaveScript() error {
 		return err
 	}
 
+	return nil
+}
+
+func (c Config) ReadDir(dirname string) ([]string, error) {
+	locals := make(map[string]bool)
+	entries, err := os.ReadDir(filepath.Join(c.zdrctConfigDir, dirname))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+
+	result := make([]string, 0, len(entries))
+
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() {
+			continue
+		}
+
+		if strings.HasSuffix(entry.Name(), ".swp") || strings.HasPrefix(entry.Name(), ".") || strings.HasSuffix(entry.Name(), "~") {
+			continue
+		}
+
+		locals[entry.Name()] = true
+		result = append(result, filepath.Join(c.zdrctConfigDir, dirname, entry.Name()))
+	}
+
+	entries, err = os.ReadDir(dirname)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() {
+			continue
+		}
+
+		if strings.HasSuffix(entry.Name(), ".swp") || strings.HasPrefix(entry.Name(), ".") || strings.HasSuffix(entry.Name(), "~") {
+			continue
+		}
+
+		if locals[entry.Name()] {
+			continue
+		}
+
+		result = append(result, filepath.Join(dirname, entry.Name()))
+	}
+
+	return result, nil
+}
+
+func (c Config) InitAssetsTemplates(r *gin.Engine) error {
+	var err error
+	var data []byte
+	var tmpl *template.Template
+
+	var names, pnames []string
+
+	template_files, err := c.ReadDir("templates")
+	if err != nil {
+		return err
+	}
+	for _, name := range template_files {
+		if strings.HasPrefix(filepath.Base(name), "_") {
+			pnames = append(pnames, name)
+		} else {
+			names = append(names, name)
+		}
+	}
+
+	funcs := template.FuncMap{
+		"join": strings.Join,
+	}
+
+	render := multitemplate.New()
+	ptmpls := make(map[string]*template.Template)
+	for _, pname := range pnames {
+		if data, err = os.ReadFile(pname); err != nil {
+			return fmt.Errorf("cannot open %q from tbox while iterating over pnames: %w", pname, err)
+		}
+		pname = strings.TrimSuffix(filepath.Base(pname), ".html")
+		if tmpl, err = template.New(pname).Funcs(funcs).Parse(string(data)); err != nil {
+			return fmt.Errorf("cannot parse template %q: %w", pname, err)
+		}
+		ptmpls[pname] = tmpl
+	}
+	for _, name := range names {
+		if data, err = os.ReadFile(name); err != nil {
+			return fmt.Errorf("cannot open %q from tbox while iterating over names: %w", name, err)
+		}
+		if tmpl, err = template.New(filepath.Base(name)).Funcs(funcs).Parse(string(data)); err != nil {
+			return fmt.Errorf("cannot parse template %q: %w", name, err)
+		}
+		for pname, ptmpl := range ptmpls {
+			tmpl.AddParseTree(pname, ptmpl.Tree)
+		}
+		render.Add(filepath.Base(name), tmpl)
+	}
+	r.HTMLRender = render
+
+	asset_files, err := c.ReadDir("assets")
+	if err != nil {
+		return err
+	}
+	for _, name := range asset_files {
+		name := name
+		r.GET(filepath.Base(name), func(c *gin.Context) {
+			c.File(name)
+		})
+	}
 	return nil
 }
 
