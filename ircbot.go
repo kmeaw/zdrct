@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"log"
 	"math/rand"
 	"net"
+	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -100,8 +103,6 @@ func (b *IRCBot) Handle(c *irc.Client, m *irc.Message) {
 			b.Balances[from] = 5
 		}
 
-		b.e.Set("from", from)
-
 		if strings.HasPrefix(flds[0], "!") {
 			cmd := flds[0][1:]
 			_, err := b.e.Get("cmd_" + cmd)
@@ -116,11 +117,32 @@ func (b *IRCBot) Handle(c *irc.Client, m *irc.Message) {
 			}
 
 			script := fmt.Sprintf("cmd_%s(%s)", cmd, strings.Join(args, ", "))
-			_, err = vm.Execute(b.e, nil, script)
-			if err != nil {
-				log.Printf("cannot execute script %q: %s", script, err)
-				return
-			}
+			e := b.e.DeepCopy()
+			ctx := context.WithValue(context.Background(), "from_user", from)
+
+			go func(ctx context.Context, e *env.Env) {
+				b.e.Set("eval", func(code string) interface{} {
+					result, err := vm.ExecuteContext(ctx, e, nil, code)
+					if err != nil {
+						log.Printf("error while executing %q: %s", code, err)
+						return nil
+					}
+					return result
+				})
+				b.e.Set("forth", func(tokens ...string) (interface{}, error) {
+					b.mu.Lock()
+					e := b.e.DeepCopy()
+					b.mu.Unlock()
+
+					return b.EvalForth(ctx, e, tokens...)
+				})
+
+				_, err = vm.ExecuteContext(ctx, e, nil, script)
+				if err != nil {
+					log.Printf("cannot execute script %q: %s", script, err)
+					return
+				}
+			}(ctx, e)
 		}
 	}
 }
@@ -147,21 +169,41 @@ func (b *IRCBot) LoadScript(script string) error {
 	defer b.mu.Unlock()
 
 	b.e = env.NewEnv()
-	_, err := vm.Execute(b.e, nil, script)
+	_, err := vm.Execute(b.e, nil, "func from() {\n return \"<FAIL>\"\n }\n")
+	if err != nil {
+		return err
+	}
+
+	_, err = vm.Execute(b.e, &vm.Options{Debug: true}, script)
 	if err != nil {
 		return err
 	}
 
 	var errors []error
-	errors = append(errors, b.e.Define("from", ""))
+	orig_from, err := b.e.Get("from")
+	errors = append(errors, err)
+	errors = append(errors, b.e.Set("from", func(ctx context.Context) (reflect.Value, reflect.Value) {
+		from := ctx.Value("from_user")
+		_, err := orig_from.(func(context.Context) (reflect.Value, reflect.Value))(ctx)
+		return reflect.ValueOf(from), err
+	}))
 	errors = append(errors, b.e.Define("admin", b.AdminName))
 	errors = append(errors, b.e.Define("balance", func(name string) int {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+
 		return b.Balances[name]
 	}))
 	errors = append(errors, b.e.Define("set_balance", func(name string, value int) {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+
 		b.Balances[name] = value
 	}))
 	errors = append(errors, b.e.Define("reply", func(format string, args ...interface{}) {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+
 		t0 := time.Now()
 		t1 := b.LastBuckets["reply"]
 		if t0.Before(t1) {
@@ -171,6 +213,9 @@ func (b *IRCBot) LoadScript(script string) error {
 		b.LastBuckets["reply"] = time.Now().Add(time.Second)
 	}))
 	errors = append(errors, b.e.Define("last", func(key string) int64 {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+
 		t, ok := b.LastBuckets[key]
 		if ok {
 			return t.Unix()
@@ -179,9 +224,15 @@ func (b *IRCBot) LoadScript(script string) error {
 		}
 	}))
 	errors = append(errors, b.e.Define("set_last", func(key string, delta int64) {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+
 		b.LastBuckets[key] = time.Now().Add(time.Duration(delta) * time.Second)
 	}))
 	errors = append(errors, b.e.Define("rate", func(key string, delta int64) bool {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+
 		t, ok := b.LastBuckets[key]
 		if !ok || time.Now().After(t) {
 			b.LastBuckets[key] = time.Now().Add(time.Duration(delta) * time.Second)
@@ -205,8 +256,19 @@ func (b *IRCBot) LoadScript(script string) error {
 
 		log.Printf("Bad argument for sleep: %v (%T)", duration, duration)
 	}))
+	errors = append(errors, b.e.Define("int", func(token string) int64 {
+		n, err := strconv.ParseInt(token, 0, 64)
+		if err != nil {
+			log.Printf("cannot convert %q to int: %s", token, err)
+			return -1
+		}
+		return n
+	}))
 	errors = append(errors, b.e.Define("join", strings.Join))
 	errors = append(errors, b.e.Define("rcon", func(cmd string) bool {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+
 		if !b.RconClient.IsOnline() {
 			return false
 		}
@@ -279,6 +341,10 @@ func (b *IRCBot) LoadScript(script string) error {
 			alert.Image = args[0]
 		}
 		log.Printf("alert(%q)", text)
+
+		b.mu.Lock()
+		defer b.mu.Unlock()
+
 		b.Alerter.Broadcast(alert)
 	}))
 	errors = append(errors, b.e.Define("list_cmds", func() (result []string) {
@@ -298,6 +364,8 @@ func (b *IRCBot) LoadScript(script string) error {
 
 		return
 	}))
+	errors = append(errors, b.e.Define("eval", nil))
+	errors = append(errors, b.e.Define("forth", nil))
 	for _, err := range errors {
 		if err != nil {
 			return err
