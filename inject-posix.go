@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/yookoala/realpath"
 )
 
 func inject(exePath string, args ...string) error {
@@ -15,7 +17,12 @@ func inject(exePath string, args ...string) error {
 		return err
 	}
 
-	dir, _ := filepath.Split(exePath)
+	real, err := realpath.Realpath(exePath)
+	if err != nil {
+		real = exePath
+	}
+
+	dir, _ := filepath.Split(real)
 	if dir != "" {
 		err := os.Chdir(dir)
 		if err != nil {
@@ -24,6 +31,8 @@ func inject(exePath string, args ...string) error {
 	}
 
 	cmd := exec.Command(exePath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(), "LD_PRELOAD="+filepath.Join(wd, "libinjector.so"))
 	return cmd.Run()
 }

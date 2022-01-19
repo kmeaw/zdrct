@@ -271,6 +271,11 @@ func (c Config) ReadDir(dirname string) ([]string, error) {
 		result = append(result, filepath.Join(c.zdrctConfigDir, dirname, entry.Name()))
 	}
 
+	wd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+
 	entries, err = os.ReadDir(dirname)
 	if err != nil {
 		return nil, err
@@ -289,7 +294,7 @@ func (c Config) ReadDir(dirname string) ([]string, error) {
 			continue
 		}
 
-		result = append(result, filepath.Join(dirname, entry.Name()))
+		result = append(result, filepath.Join(wd, dirname, entry.Name()))
 	}
 
 	return result, nil
