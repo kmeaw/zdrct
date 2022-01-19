@@ -29,48 +29,108 @@ type Config struct {
 func (c *Config) SetDefaultScript() {
 	c.Script = `
 cmd_echo = func(flds...) {
-  reply("echo for %q: %q", from, join(flds, " "))
+  reply("echo for %q: %q", from(), join(flds, " "))
+}
+
+cmd_help = func() {
+  reply("Available commands: %v", list_cmds())
 }
 
 cmd_rcon = func(flds...) {
-  if from != admin {
-    reply("Forbidden, %q != %q.", from, admin)
+  if from() != admin {
+    reply("Forbidden, %q != %q.", from(), admin)
   } else {
     rcon(join(flds, " "))
   }
 }
 
 cmd_balance = func() {
-  reply("You have %d credits.", balance(from))
+  reply("You have %d credits.", balance(from()))
 }
 
 func redeem(price, cmd) {
   return func(args...) {
-    b = balance(from)
+    b = balance(from())
     if b < price {
-      reply("You have %d credits, but this command requires %d.", balance(from), price)
+      reply("You have %d credits, but this command requires %d.", balance(from()), price)
+      return false
     }
     result = cmd(args...)
     if result {
-      set_balance(from, b - price)
+      set_balance(from(), b - price)
     }
   }
 }
 
-cmd_gargoyle = redeem(10, func() {
-  if rcon("summon HereticImp") {
-    alert(sprintf("%s has summoned a gargoyle!", from), "gargoyle.png", "impsit.mp3")
-    reply("%s has summoned a gargoyle!", from)
+func monster(class_name, name, sound) {
+  m = make(struct {
+    ClassName string,
+    Name string,
+    Sound string
+  })
+  m.ClassName = class_name
+  m.Name = name
+  m.Sound = sound
+  return m
+}
+
+func spawn_monster(m) {
+  if rcon("summon " + m.ClassName) {
+    alert(sprintf("%s has summoned a %s!", from(), m.Name), m.Name + ".png", m.Sound)
+    reply("%s has summoned a %s!", from(), m.Name)
+    sleep(3)
+    rcon("summon CrossbowAmmo")
+    return true
+  } else {
+    return false
   }
+}
+
+Golem = monster("Mummy", "golem", "mumsit.mp3")
+Gargoyle = monster("HereticImp", "gargoyle", "impsit.mp3")
+
+cmd_golem = redeem(10, func() {
+  return spawn_monster(Golem)
+})
+
+cmd_gargoyle = redeem(10, func() {
+  return spawn_monster(Gargoyle)
+})
+
+cmd_random = redeem(40, func() {
+  return spawn_monster(roll(1.0, Golem, 1.0, Gargoyle))
 })
 
 cmd_flask = redeem(5, func() {
   if rcon("summon " + roll(3.0, "ArtiHealth", 1.0, "ActivatedTimeBomb")) {
-    reply("%s, thank you!", from)
-    alert(sprintf("%s has spawned a flask", from), "QuartzFlask.gif", "artiup.mp3")
+    reply("%s, thank you!", from())
+    alert(sprintf("%s has spawned a flask", from()), "QuartzFlask.gif", "artiup.mp3")
     return true
   }
 })
+
+cmd_tome = redeem(20, func() {
+  if rcon("summon ArtiTomeOfPower") {
+    reply("%s, thank you for this powerful artifact!", from())
+    alert(sprintf("%s has summoned a tome of power", from()), "ArtiTome.png", "artiup.mp3")
+    return true
+  }
+})
+
+cmd_bomb = redeem(20, func() {
+  alert(sprintf("%s has summoned a time bomb!", from()), "bomb.png", "artiup.mp3")
+  sleep(3)
+  reply("%s, do you really want me to fail?", from())
+  return rcon("summon ActivatedTimeBomb")
+})
+
+func cmd_eval(tokens...) {
+  return forth(tokens...)
+}
+
+func cmd_sleep1() {
+  sleep(1)
+}
 `
 }
 
