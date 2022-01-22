@@ -17,7 +17,7 @@ import (
 
 const HELIX_REWARDS = "https://api.twitch.tv/helix/channel_points/custom_rewards"
 const APP_ID = "ehx3943o3ttw0nplenassv0pme8yvb"
-const DEFAULT_APP_SCOPES = "channel:manage:redemptions"
+const DEFAULT_APP_SCOPES = "chat:read,chat:edit,channel:manage:redemptions"
 const DEFAULT_BOT_SCOPES = "chat:read,chat:edit"
 
 type TwitchClient struct {
@@ -88,6 +88,7 @@ func (c *TwitchClient) GetAuthLink(redirect_url, csrf_token string) string {
 		"response_type": []string{"token"},
 		"scope":         []string{strings.Join(c.Scopes, " ")},
 		"state":         []string{v.Encode()},
+		"force_verify":  []string{"true"},
 	}).Encode()
 
 	return u.String()
@@ -99,6 +100,7 @@ func (c *TwitchClient) apiCall(ctx context.Context, api_url string, payload map[
 	var data []byte
 
 	if c.ExpiresAt.Before(time.Now()) && !c.ExpiresAt.IsZero() {
+		c.Token = ""
 		return fmt.Errorf("token has expired at %s", c.ExpiresAt)
 	}
 

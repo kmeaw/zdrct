@@ -144,6 +144,13 @@ func main() {
 			return
 		}
 
+		config.BotToken = bot.Token
+		config.BroadcasterToken = broadcaster.Token
+
+		if err := config.Save(); err != nil {
+			log.Printf("cannot save config: %s", err)
+		}
+
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 
