@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/mattn/anko/parser"
 	"golang.org/x/net/websocket"
 )
 
@@ -43,6 +44,7 @@ func main() {
 	rcon := NewRconClient()
 	ircbot := NewIRCBot(bot)
 	ircbot.RconClient = rcon
+	remote := NewRemote(ircbot)
 	alerter := NewAlerter()
 	ircbot.Alerter = alerter
 
@@ -74,6 +76,9 @@ func main() {
 	if err := broadcaster.Prepare(ctx); err != nil {
 		broadcaster.Token = ""
 		config.BroadcasterToken = ""
+	} else {
+		remote.SetToken(broadcaster.Token)
+		remote.SetChannel(broadcaster.Login)
 	}
 	bot.Token = config.BotToken
 	if err := bot.Prepare(ctx); err != nil {
@@ -151,6 +156,11 @@ func main() {
 			log.Printf("cannot save config: %s", err)
 		}
 
+		if user_purpose == "broadcaster" {
+			remote.SetToken(broadcaster.Token)
+			remote.SetChannel(broadcaster.Login)
+		}
+
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 
@@ -171,10 +181,17 @@ func main() {
 
 		err = ircbot.LoadScript(script)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusOK, gin.H{
+			h := gin.H{
 				"error":       "script_error",
 				"description": err.Error(),
-			})
+			}
+
+			if perr, ok := err.(*parser.Error); ok {
+				h["line"] = perr.Pos.Line
+				h["column"] = perr.Pos.Column
+			}
+
+			c.AbortWithStatusJSON(http.StatusOK, h)
 			return err
 		}
 
@@ -182,6 +199,10 @@ func main() {
 		if err := config.Save(); err != nil {
 			log.Printf("cannot save config: %s", err)
 		}
+
+		event := RemoteEvent{}
+		event.Config.Buttons = ircbot.GetButtons()
+		remote.SetConfig(event)
 
 		return nil
 	}
@@ -191,7 +212,11 @@ func main() {
 		if err != nil {
 			return
 		}
-		c.Redirect(http.StatusFound, "/?tab=script")
+		if c.Query("xhr") == "" {
+			c.Redirect(http.StatusFound, "/?tab=script")
+		} else {
+			c.JSON(http.StatusOK, gin.H{"ok": true})
+		}
 	})
 
 	r.POST("/connect", func(c *gin.Context) {
@@ -303,7 +328,12 @@ func main() {
 			})
 			return
 		}
-		c.Redirect(http.StatusFound, "/?tab=script")
+
+		if c.Query("xhr") == "" {
+			c.Redirect(http.StatusFound, "/?tab=script")
+		} else {
+			c.JSON(http.StatusOK, gin.H{"ok": true})
+		}
 	})
 
 	r.POST("/rundoom", func(c *gin.Context) {
@@ -431,15 +461,15 @@ func main() {
 	go func() {
 		switch runtime.GOOS {
 		case "linux":
-			exec.Command("xdg-open", "http://localhost:8666/").Start()
+			go exec.Command("xdg-open", "http://localhost:8666/").Run()
 		case "windows":
-			exec.Command(
+			go exec.Command(
 				"rundll32",
 				"url.dll,FileProtocolHandler",
 				"http://localhost:8666/",
-			).Start()
+			).Run()
 		case "darwin":
-			exec.Command("open", "http://localhost:8666/").Start()
+			go exec.Command("open", "http://localhost:8666/").Run()
 		}
 	}()
 	log.Panic(r.RunListener(l))

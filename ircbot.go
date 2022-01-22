@@ -18,6 +18,19 @@ import (
 	"gopkg.in/irc.v3"
 )
 
+type Actor struct {
+	ID         string `json:"id"`
+	AlertImage string `json:"alert_image,omitempty"`
+	AlertSound string `json:"alert_sound,omitempty"`
+	Reply      string `json:"reply,omitempty"`
+}
+
+type Command struct {
+	Cmd   string `json:"cmd"`
+	Text  string `json:"text"`
+	Image string `json:"image"`
+}
+
 type IRCBot struct {
 	Balances    map[string]int
 	UserName    string
@@ -27,6 +40,7 @@ type IRCBot struct {
 	Script      string
 	LastBuckets map[string]time.Time
 	Alerter     *Alerter
+	Buttons     []*Command
 
 	crediter *time.Ticker
 	online   bool
@@ -75,6 +89,67 @@ func (b *IRCBot) Reply(format string, rest ...interface{}) {
 	})
 }
 
+func (b *IRCBot) ProcessMessage(from, msg string) {
+	flds := strings.Fields(msg)
+	if len(flds) == 0 {
+		return
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.e == nil {
+		log.Printf("script is not loaded, ignoring %q: %q", from, msg)
+		return
+	}
+
+	if _, ok := b.Balances[from]; !ok {
+		b.Balances[from] = 5
+	}
+
+	if strings.HasPrefix(flds[0], "!") {
+		cmd := flds[0][1:]
+		_, err := b.e.Get("cmd_" + cmd)
+		if err != nil {
+			log.Printf("Unrecognized command: %q: %s", cmd, err)
+			return
+		}
+
+		args := make([]string, 0, len(flds)-1)
+		for _, arg := range flds[1:] {
+			args = append(args, fmt.Sprintf("%q", arg))
+		}
+
+		script := fmt.Sprintf("cmd_%s(%s)", cmd, strings.Join(args, ", "))
+		e := b.e.DeepCopy()
+		ctx := context.WithValue(context.Background(), "from_user", from)
+
+		go func(ctx context.Context, e *env.Env) {
+			b.e.Set("eval", func(code string) interface{} {
+				result, err := vm.ExecuteContext(ctx, e, nil, code)
+				if err != nil {
+					log.Printf("error while executing %q: %s", code, err)
+					return nil
+				}
+				return result
+			})
+			b.e.Set("forth", func(tokens ...string) (interface{}, error) {
+				b.mu.Lock()
+				e := b.e.DeepCopy()
+				b.mu.Unlock()
+
+				return b.EvalForth(ctx, e, tokens...)
+			})
+
+			_, err = vm.ExecuteContext(ctx, e, nil, script)
+			if err != nil {
+				log.Printf("cannot execute script %q: %s", script, err)
+				return
+			}
+		}(ctx, e)
+	}
+}
+
 func (b *IRCBot) Handle(c *irc.Client, m *irc.Message) {
 	b.mu.Lock()
 	ch := b.ChannelName
@@ -91,59 +166,7 @@ func (b *IRCBot) Handle(c *irc.Client, m *irc.Message) {
 		}
 
 		from := m.Prefix.User
-		flds := strings.Fields(msg)
-		if len(flds) == 0 {
-			return
-		}
-
-		b.mu.Lock()
-		defer b.mu.Unlock()
-
-		if _, ok := b.Balances[from]; !ok {
-			b.Balances[from] = 5
-		}
-
-		if strings.HasPrefix(flds[0], "!") {
-			cmd := flds[0][1:]
-			_, err := b.e.Get("cmd_" + cmd)
-			if err != nil {
-				log.Printf("Unrecognized command: %q: %s", cmd, err)
-				return
-			}
-
-			args := make([]string, 0, len(flds)-1)
-			for _, arg := range flds[1:] {
-				args = append(args, fmt.Sprintf("%q", arg))
-			}
-
-			script := fmt.Sprintf("cmd_%s(%s)", cmd, strings.Join(args, ", "))
-			e := b.e.DeepCopy()
-			ctx := context.WithValue(context.Background(), "from_user", from)
-
-			go func(ctx context.Context, e *env.Env) {
-				b.e.Set("eval", func(code string) interface{} {
-					result, err := vm.ExecuteContext(ctx, e, nil, code)
-					if err != nil {
-						log.Printf("error while executing %q: %s", code, err)
-						return nil
-					}
-					return result
-				})
-				b.e.Set("forth", func(tokens ...string) (interface{}, error) {
-					b.mu.Lock()
-					e := b.e.DeepCopy()
-					b.mu.Unlock()
-
-					return b.EvalForth(ctx, e, tokens...)
-				})
-
-				_, err = vm.ExecuteContext(ctx, e, nil, script)
-				if err != nil {
-					log.Printf("cannot execute script %q: %s", script, err)
-					return
-				}
-			}(ctx, e)
-		}
+		b.ProcessMessage(from, msg)
 	}
 }
 
@@ -168,24 +191,36 @@ func (b *IRCBot) LoadScript(script string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	loading := true
+
+	var errors []error
+
+	b.Buttons = nil
+
 	b.e = env.NewEnv()
 	_, err := vm.Execute(b.e, nil, "func from() {\n return \"<FAIL>\"\n }\n")
 	if err != nil {
 		return err
 	}
 
-	_, err = vm.Execute(b.e, &vm.Options{Debug: true}, script)
-	if err != nil {
-		return err
-	}
-
-	var errors []error
+	errors = append(errors, b.e.DefineType("Command", Command{}))
+	errors = append(errors, b.e.DefineType("Actor", Actor{}))
 	orig_from, err := b.e.Get("from")
 	errors = append(errors, err)
 	errors = append(errors, b.e.Set("from", func(ctx context.Context) (reflect.Value, reflect.Value) {
 		from := ctx.Value("from_user")
 		_, err := orig_from.(func(context.Context) (reflect.Value, reflect.Value))(ctx)
 		return reflect.ValueOf(from), err
+	}))
+	errors = append(errors, b.e.Define("add_command", func(commands ...*Command) {
+		if !loading {
+			log.Println("dynamic add_command is not allowed")
+			return
+		}
+
+		for _, command := range commands {
+			b.Buttons = append(b.Buttons, command)
+		}
 	}))
 	errors = append(errors, b.e.Define("admin", b.AdminName))
 	errors = append(errors, b.e.Define("balance", func(name string) int {
@@ -372,6 +407,13 @@ func (b *IRCBot) LoadScript(script string) error {
 		}
 	}
 
+	_, err = vm.Execute(b.e, nil, script)
+	if err != nil {
+		return err
+	}
+
+	loading = false
+
 	b.Script = script
 	return nil
 }
@@ -411,6 +453,13 @@ func (b *IRCBot) Start() error {
 	b.online = true
 
 	return nil
+}
+
+func (b *IRCBot) GetButtons() []*Command {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.Buttons
 }
 
 // vim: ai:ts=8:sw=8:noet:syntax=go

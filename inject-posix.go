@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/yookoala/realpath"
 )
@@ -22,19 +23,22 @@ func inject(exePath string, args ...string) error {
 		real = exePath
 	}
 
-	dir, _ := filepath.Split(real)
-	if dir != "" {
-		err := os.Chdir(dir)
-		if err != nil {
-			return err
-		}
-	}
-
-	cmd := exec.Command(exePath)
+	cmd := exec.Command(exePath, args...)
+	cmd.Dir, _ = filepath.Split(real)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(), "LD_PRELOAD="+filepath.Join(wd, "libinjector.so"))
-	return cmd.Run()
+
+	ch := make(chan error, 1)
+	go func() {
+		ch <- cmd.Run()
+	}()
+	select {
+	case <-time.After(2 * time.Second):
+		return nil
+	case err := <-ch:
+		return err
+	}
 }
 
 func InitSound() error {

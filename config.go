@@ -14,6 +14,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+var Assets = map[string]string{}
+
 type Config struct {
 	BroadcasterToken string `json:"broadcaster_token,omitempty"`
 	BotToken         string `json:"bot_token,omitempty"`
@@ -355,6 +357,7 @@ func (c Config) InitAssetsTemplates(r *gin.Engine) error {
 	}
 	for _, name := range asset_files {
 		name := name
+		Assets[filepath.Base(name)] = name
 		r.GET(filepath.Base(name), func(c *gin.Context) {
 			c.File(name)
 		})
