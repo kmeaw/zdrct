@@ -126,40 +126,41 @@ cmd_bomb = redeem(20, func() {
   return rcon("summon ActivatedTimeBomb")
 })
 
-func cmd_eval(tokens...) {
-  return forth(tokens...)
-}
-
-func cmd_sleep1() {
-  sleep(1)
-}
-
 button_tome = new(Command)
 button_tome.Cmd = "tome"
 button_tome.Text = "Tome of Power"
 button_tome.Image = "ArtiTome.png"
+add_command(button_tome)
 
 button_random = new(Command)
 button_random.Cmd = "random"
 button_random.Text = "Random"
 button_random.Image = "random.png"
+add_command(button_random)
 
 button_flask = new(Command)
 button_flask.Cmd = "flask"
 button_flask.Text = "Quartz Flask"
 button_flask.Image = "QuartzFlask.gif"
+add_command(button_flask)
 
 button_gargoyle = new(Command)
 button_gargoyle.Cmd = "gargoyle"
 button_gargoyle.Text = "Gargoyle"
 button_gargoyle.Image = "gargoyle.png"
+add_command(button_gargoyle)
 
 button_golem = new(Command)
 button_golem.Cmd = "golem"
 button_golem.Text = "Golem"
 button_golem.Image = "golem.png"
+add_command(button_golem)
 
-add_command(button_tome, button_random, button_flask, button_gargoyle, button_golem)
+reward_flask = new(Reward)
+reward_flask.Cost = 2
+reward_flask.Title = "Flask"
+reward_flask.IsEnabled = true
+map_reward(reward_flask, button_flask)
 `
 }
 

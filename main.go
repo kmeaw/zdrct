@@ -42,7 +42,7 @@ func main() {
 	})
 	bot.Scopes = strings.Split(DEFAULT_BOT_SCOPES, ",")
 	rcon := NewRconClient()
-	ircbot := NewIRCBot(bot)
+	ircbot := NewIRCBot(broadcaster, bot)
 	ircbot.RconClient = rcon
 	remote := NewRemote(ircbot)
 	alerter := NewAlerter()
@@ -76,14 +76,19 @@ func main() {
 	if err := broadcaster.Prepare(ctx); err != nil {
 		broadcaster.Token = ""
 		config.BroadcasterToken = ""
+		log.Printf("invalidating broadcaster token: %s", err)
 	} else {
-		remote.SetToken(broadcaster.Token)
-		remote.SetChannel(broadcaster.Login)
+		err := broadcaster.LoadRewards(ctx)
+		if err != nil {
+			log.Printf("error loading rewards: %s", err)
+		}
+		remote.SetBroadcaster(broadcaster)
 	}
 	bot.Token = config.BotToken
 	if err := bot.Prepare(ctx); err != nil {
 		bot.Token = ""
 		config.BotToken = ""
+		log.Printf("invalidating bot token: %s", err)
 	}
 	cancel()
 
@@ -157,8 +162,10 @@ func main() {
 		}
 
 		if user_purpose == "broadcaster" {
-			remote.SetToken(broadcaster.Token)
-			remote.SetChannel(broadcaster.Login)
+			if err := broadcaster.LoadRewards(c.Request.Context()); err != nil {
+				log.Printf("error loading rewards: %s", err)
+			}
+			remote.SetBroadcaster(broadcaster)
 		}
 
 		c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -206,6 +213,59 @@ func main() {
 
 		return nil
 	}
+
+	r.POST("/rewards/:id/delete", func(c *gin.Context) {
+		err := broadcaster.DeleteReward(
+			c.Request.Context(),
+			Reward{
+				RewardCore: RewardCore{
+					ID: c.Param("id"),
+				},
+			},
+		)
+
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusOK, gin.H{
+				"error":       "cannot_delete_reward",
+				"description": err.Error(),
+			})
+			return
+		}
+
+		if c.Query("xhr") == "" {
+			c.Redirect(http.StatusFound, "/?tab=twitch")
+		} else {
+			c.JSON(http.StatusOK, gin.H{"ok": true})
+		}
+	})
+
+	r.POST("/rewards", func(c *gin.Context) {
+		var reward Reward
+		if err := c.ShouldBind(&reward); err != nil {
+			c.AbortWithError(http.StatusBadRequest, err)
+			return
+		}
+
+		log.Printf("CreateReward(%#v)", reward)
+
+		err := broadcaster.CreateReward(
+			c.Request.Context(),
+			&reward,
+		)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusOK, gin.H{
+				"error":       "cannot_create_reward",
+				"description": err.Error(),
+			})
+			return
+		}
+
+		if c.Query("xhr") == "" {
+			c.Redirect(http.StatusFound, "/?tab=twitch")
+		} else {
+			c.JSON(http.StatusOK, gin.H{"ok": true})
+		}
+	})
 
 	r.POST("/loadscript", func(c *gin.Context) {
 		err := loadScript(c)

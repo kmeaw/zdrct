@@ -41,25 +41,30 @@ type IRCBot struct {
 	LastBuckets map[string]time.Time
 	Alerter     *Alerter
 	Buttons     []*Command
+	RewardMap   map[string]*Command
 
 	crediter *time.Ticker
 	online   bool
 
 	e *env.Env
 
-	twitch *TwitchClient
+	tw_broadcaster *TwitchClient
+	tw_bot         *TwitchClient
+
 	client *irc.Client
 	conn   net.Conn
 	mu     *sync.Mutex
 }
 
-func NewIRCBot(tw *TwitchClient) *IRCBot {
+func NewIRCBot(tw_broadcaster, tw_bot *TwitchClient) *IRCBot {
 	return &IRCBot{
 		Balances:    make(map[string]int),
 		LastBuckets: make(map[string]time.Time),
+		RewardMap:   make(map[string]*Command),
 
-		twitch: tw,
-		mu:     new(sync.Mutex),
+		tw_broadcaster: tw_broadcaster,
+		tw_bot:         tw_bot,
+		mu:             new(sync.Mutex),
 	}
 }
 
@@ -89,18 +94,17 @@ func (b *IRCBot) Reply(format string, rest ...interface{}) {
 	})
 }
 
-func (b *IRCBot) ProcessMessage(from, msg string) {
+func (b *IRCBot) ProcessMessage(from, msg string) error {
 	flds := strings.Fields(msg)
 	if len(flds) == 0 {
-		return
+		return nil
 	}
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	if b.e == nil {
-		log.Printf("script is not loaded, ignoring %q: %q", from, msg)
-		return
+		return fmt.Errorf("script is not loaded, ignoring %q: %q", from, msg)
 	}
 
 	if _, ok := b.Balances[from]; !ok {
@@ -111,8 +115,7 @@ func (b *IRCBot) ProcessMessage(from, msg string) {
 		cmd := flds[0][1:]
 		_, err := b.e.Get("cmd_" + cmd)
 		if err != nil {
-			log.Printf("Unrecognized command: %q: %s", cmd, err)
-			return
+			return fmt.Errorf("Unrecognized command: %q: %s", cmd, err)
 		}
 
 		args := make([]string, 0, len(flds)-1)
@@ -148,6 +151,8 @@ func (b *IRCBot) ProcessMessage(from, msg string) {
 			}
 		}(ctx, e)
 	}
+
+	return nil
 }
 
 func (b *IRCBot) Handle(c *irc.Client, m *irc.Message) {
@@ -166,7 +171,10 @@ func (b *IRCBot) Handle(c *irc.Client, m *irc.Message) {
 		}
 
 		from := m.Prefix.User
-		b.ProcessMessage(from, msg)
+		err := b.ProcessMessage(from, msg)
+		if err != nil {
+			log.Println(err)
+		}
 	}
 }
 
@@ -196,6 +204,7 @@ func (b *IRCBot) LoadScript(script string) error {
 	var errors []error
 
 	b.Buttons = nil
+	b.RewardMap = map[string]*Command{}
 
 	b.e = env.NewEnv()
 	_, err := vm.Execute(b.e, nil, "func from() {\n return \"<FAIL>\"\n }\n")
@@ -204,6 +213,7 @@ func (b *IRCBot) LoadScript(script string) error {
 	}
 
 	errors = append(errors, b.e.DefineType("Command", Command{}))
+	errors = append(errors, b.e.DefineType("Reward", Reward{}))
 	errors = append(errors, b.e.DefineType("Actor", Actor{}))
 	orig_from, err := b.e.Get("from")
 	errors = append(errors, err)
@@ -221,6 +231,48 @@ func (b *IRCBot) LoadScript(script string) error {
 		for _, command := range commands {
 			b.Buttons = append(b.Buttons, command)
 		}
+	}))
+	errors = append(errors, b.e.Define("map_reward", func(reward *Reward, command *Command) {
+		if !loading {
+			log.Println("dynamic add_reward is not allowed")
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(
+			context.Background(),
+			time.Second*10,
+		)
+		defer cancel()
+		m := map[string]*Reward{}
+
+		if b.tw_broadcaster == nil || b.tw_broadcaster.BroadcasterID == 0 {
+			log.Println("broadcaster token is not set")
+			return
+		}
+		for _, reward := range b.tw_broadcaster.Rewards {
+			m[reward.Key()] = reward
+		}
+
+		if lr, ok := m[reward.Key()]; ok {
+			if lr.Prompt != reward.Prompt || lr.Cost != reward.Cost {
+				lr.Prompt = reward.Prompt
+				if reward.Cost != 0 {
+					lr.Cost = reward.Cost
+				}
+				err := lr.Save(ctx)
+				if err != nil {
+					log.Printf("error updating reward: %s", err)
+				}
+			}
+			reward.ID = lr.ID
+		} else {
+			err := b.tw_broadcaster.CreateReward(ctx, reward)
+			if err != nil {
+				log.Printf("error creating reward: %s", err)
+			}
+		}
+
+		b.RewardMap[reward.ID] = command
 	}))
 	errors = append(errors, b.e.Define("admin", b.AdminName))
 	errors = append(errors, b.e.Define("balance", func(name string) int {
@@ -426,7 +478,7 @@ func (b *IRCBot) Start() error {
 		return nil
 	}
 
-	if b.twitch.Token == "" {
+	if b.tw_bot.Token == "" {
 		return fmt.Errorf("twitch token is not set")
 	}
 
@@ -442,7 +494,7 @@ func (b *IRCBot) Start() error {
 
 	b.client = irc.NewClient(conn, irc.ClientConfig{
 		Nick:    b.UserName,
-		Pass:    "oauth:" + b.twitch.Token,
+		Pass:    "oauth:" + b.tw_bot.Token,
 		User:    b.UserName,
 		Name:    b.UserName,
 		Handler: b,
@@ -460,6 +512,13 @@ func (b *IRCBot) GetButtons() []*Command {
 	defer b.mu.Unlock()
 
 	return b.Buttons
+}
+
+func (b *IRCBot) GetRewardsMap() map[string]*Command {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.RewardMap
 }
 
 // vim: ai:ts=8:sw=8:noet:syntax=go

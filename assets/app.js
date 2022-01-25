@@ -6,6 +6,38 @@ window.addEventListener('DOMContentLoaded', (event) => {
 	const $scriptmsg = document.getElementById('scriptmsg');
 
 	const $submit = $scriptform.querySelector('input[type=submit]');
+	const $rewards_table = document.getElementById('rewards_table');
+
+	$rewards_table.querySelectorAll('form.delete-form').forEach((frm) => frm.addEventListener('submit', (event) => {
+		event.preventDefault();
+		event.stopPropagation();
+
+		const req = fetch(frm.action + '?xhr=1', {
+			method: frm.method,
+			mode: 'same-origin',
+			cache: 'no-cache',
+			credentials: 'omit',
+			headers: {
+				'Content-Type': 'application/x-www-form-urlencoded',
+				'Accept': 'application/json'
+			},
+			redirect: 'error',
+		});
+
+		req
+			.then((resp) => resp.json())
+			.then((json) => {
+				if (json.ok) {
+					frm.parentNode.parentNode.parentNode.removeChild(frm.parentNode.parentNode);
+					return true;
+				}
+
+				frm.innerText = json.description || json.error;
+			})
+			.catch((err) => frm.innerText = err);
+
+		return false;
+	}));
 
 	$submit.disabled = true;
 

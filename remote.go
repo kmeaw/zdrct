@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -19,10 +20,9 @@ import (
 )
 
 type Remote struct {
-	Token   string
-	IRCBot  *IRCBot
-	Channel string
-	Config  *RemoteEvent
+	Broadcaster *TwitchClient
+	IRCBot      *IRCBot
+	Config      *RemoteEvent
 
 	ImageCache map[string]string
 
@@ -37,6 +37,7 @@ func NewRemote(bot *IRCBot) *Remote {
 	}
 
 	go r.connect()
+	go r.watchRewards()
 
 	return r
 }
@@ -49,21 +50,21 @@ func (r *Remote) connectOnce() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.Token == "" || r.Channel == "" {
+	if r.Broadcaster == nil || r.Broadcaster.Token == "" || r.Broadcaster.Login == "" {
 		return ErrNoConfig
 	}
 	r.conn, err = websocket.DialConfig(&websocket.Config{
 		Location: &url.URL{
 			Scheme:   "wss",
 			Host:     "zd.kmeaw.com",
-			Path:     "/channels/" + url.PathEscape(r.Channel) + "/push",
-			RawQuery: "auth=" + r.Token,
+			Path:     "/channels/" + url.PathEscape(r.Broadcaster.Login) + "/push",
+			RawQuery: "auth=" + r.Broadcaster.Token,
 		},
 
 		Origin: &url.URL{
 			Scheme: "https",
 			Host:   "zd.kmeaw.com",
-			Path:   "/channels/" + url.PathEscape(r.Channel),
+			Path:   "/channels/" + url.PathEscape(r.Broadcaster.Login),
 		},
 
 		Dialer: &net.Dialer{
@@ -114,11 +115,88 @@ func (r *Remote) readLoop() error {
 		log.Printf("ws: got event: %#v", event)
 
 		if event.Command != "" {
-			bot.ProcessMessage(
+			err := bot.ProcessMessage(
 				event.Origin,
 				"!"+event.Command,
 			)
+			if err != nil {
+				log.Println(err)
+			}
 		}
+	}
+}
+
+func (r *Remote) watchRewards() {
+	t := time.NewTicker(time.Second * 10)
+	defer t.Stop()
+	for {
+		err := r.checkRewards()
+		if err != nil {
+			if err != ErrNoConfig {
+				log.Printf("remote: cannot check rewards: %s", err)
+			}
+		}
+		<-t.C
+	}
+}
+
+func (r *Remote) checkRewards() error {
+	r.mu.Lock()
+	bot := r.IRCBot
+	m := bot.GetRewardsMap()
+	broadcaster := r.Broadcaster
+	r.mu.Unlock()
+
+	if broadcaster == nil {
+		return ErrNoConfig
+	}
+
+	rewards := r.Broadcaster.GetRewards()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	for _, reward := range rewards {
+		redemptions, err := reward.GetRedemptions(ctx)
+		if err != nil {
+			return err
+		}
+
+		for _, redemption := range redemptions {
+			if redemption.Reward == nil {
+				log.Printf("unknown reward in redemption: %#v", redemption)
+				continue
+			}
+			cmd, ok := m[redemption.Reward.ID]
+
+			if ok {
+				log.Printf(
+					"User %s redeems reward %q: %q",
+					redemption.UserLogin,
+					redemption.Reward.Title,
+					cmd.Cmd,
+				)
+				err := bot.ProcessMessage(
+					redemption.UserLogin,
+					"!"+cmd.Cmd,
+				)
+				if err != nil {
+					log.Println(err)
+				} else {
+					err = redemption.SetStatus(ctx, "FULFILLED")
+					if err != nil {
+						log.Printf("cannot change redemition status: %s", err)
+					}
+				}
+			} else {
+				log.Printf(
+					"User %s redeems reward %q: command is not mapped",
+					redemption.UserLogin,
+					redemption.Reward.Title,
+				)
+			}
+		}
+		time.Sleep(time.Second)
 	}
 
 	return nil
@@ -151,11 +229,11 @@ func (r *Remote) connect() {
 	}
 }
 
-func (r *Remote) SetToken(token string) {
+func (r *Remote) SetBroadcaster(tw *TwitchClient) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.Token = token
+	r.Broadcaster = tw
 }
 
 func (r *Remote) sendConfig() error {
@@ -216,7 +294,7 @@ func (r *Remote) sendConfig() error {
 			panic(err)
 		}
 		req.Header.Set("Content-Type", mw.FormDataContentType())
-		req.Header.Set("Authorization", "OAuth "+r.Token)
+		req.Header.Set("Authorization", "OAuth "+r.Broadcaster.Token)
 		req.Header.Set("User-Agent", "github.com/kmeaw/zdrct")
 
 		resp, err := cl.Do(req)
@@ -259,13 +337,6 @@ func (r *Remote) SetConfig(config RemoteEvent) {
 	if r.conn != nil {
 		r.sendConfig()
 	}
-}
-
-func (r *Remote) SetChannel(channel_name string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	r.Channel = channel_name
 }
 
 // vim: ai:ts=8:sw=8:noet:syntax=go

@@ -1,9 +1,6 @@
 <div class="tab-pane fade{{ if eq .Tab "twitch" }} show active{{ end }}" id="nav-twitch" role="tabpanel" aria-labelledby="nav-twitch-tab">
   {{ if .Twitch.BroadcasterID }}
-    Hello, Broadcaster {{ .Twitch.BroadcasterID }} ( {{ .Twitch.Login }} ).
-    <form action="/connect" method="POST">
-      <input type="hidden" name="token" class="saveme" data-name="broadcaster_token" value="{{ .Twitch.Token }}" />
-    </form>
+    Hello, Broadcaster {{ .Twitch.BroadcasterID }} ( {{ .Twitch.Login }} ).<br />
   {{ else }}
     Twitch API is not connected.
     <form action="/connect" method="POST">
@@ -16,9 +13,6 @@
 
   {{ if .TwitchBot.BroadcasterID }}
     Hello, Bot {{ .TwitchBot.BroadcasterID }} ( {{ .TwitchBot.Login }} ).
-    <form action="/connect" method="POST">
-      <input type="hidden" name="token" class="saveme" data-name="bot_token" value="{{ .TwitchBot.Token }}" />
-    </form>
   {{ else }}
     Twitch API for the bot is not connected.
     <form action="/connect" method="POST">
@@ -26,6 +20,62 @@
       <input type="hidden" name="csrf" value="{{ .CSRF }}" />
       <input type="hidden" name="token" class="saveme" data-name="bot_token" value="{{ .TwitchBot.Token }}" data-autosubmit="true" />
       <input type="hidden" name="purpose" value="bot" />
+    </form>
+  {{ end }}
+
+  {{ if .Twitch.BroadcasterID }}
+    <h3>Rewards</h3>
+    <div class="container mt=5" id="rewards_table">
+      {{ range .Twitch.GetRewards }}
+      <div class="container">
+        <div class="row">
+          <div class="col-sm-2">Title</div>
+          <div class="col-sm-10">{{ .Title }}</div>
+        </div>
+
+        <div class="row">
+          <div class="col-sm-2">ID</div>
+          <div class="col-sm-10">{{ .ID }}</div>
+        </div>
+
+        <div class="row">
+          <div class="col-sm-2">Cost</div>
+          <div class="col-sm-10">{{ .Cost }}</div>
+        </div>
+
+        <div class="row">
+          <div class="col-sm-12">
+            <form class="delete-form" action="/rewards/{{ .ID }}/delete" method="POST"><input type="submit" value="Delete" /></form>
+          </div>
+        </div>
+      </div>
+      {{ end }}
+    </div>
+    <h3>Create a new reward</h3>
+    <form action="/rewards" method="POST">
+       <div class="container mt=5">
+         <div class="row">
+           <div class="col-sm-2">
+             <label for="reward_title">Title:</label>
+           </div>
+           <div class="col-sm-10">
+             <input id="reward_title" name="title" />
+           </div>
+         </div>
+         <div class="row">
+           <div class="col-sm-2">
+             <label for="reward_cost">Cost:</label>
+           </div>
+           <div class="col-sm-10">
+             <input id="reward_cost" name="cost" />
+           </div>
+         </div>
+         <div class="row">
+           <div class="col-sm-12">
+              <input type="submit" value="Go!" />
+           </div>
+         </div>
+       </div>
     </form>
   {{ end }}
 </div>
