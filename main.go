@@ -59,7 +59,11 @@ func main() {
 	}
 
 	gin.SetMode(gin.ReleaseMode)
-	r := gin.Default()
+	r := gin.New()
+	r.Use(gin.LoggerWithConfig(gin.LoggerConfig{
+		SkipPaths: []string{"/check_csrf"},
+	}))
+	r.Use(gin.Recovery())
 	if err := config.InitAssetsTemplates(r); err != nil {
 		log.Fatalf("cannot init templates: %s", err)
 	}
@@ -89,6 +93,21 @@ func main() {
 		bot.Token = ""
 		config.BotToken = ""
 		log.Printf("invalidating bot token: %s", err)
+	}
+	if bot.Token != "" && broadcaster.Token != "" && config.Script != "" {
+		err = ircbot.LoadScript(config.Script)
+		if err != nil {
+			log.Printf("error loading script: %s", err)
+		} else {
+			ircbot.AdminName = broadcaster.Login
+			ircbot.UserName = bot.Login
+			ircbot.ChannelName = broadcaster.Login
+
+			err = ircbot.Start()
+			if err != nil {
+				log.Printf("cannot start bot: %s", err)
+			}
+		}
 	}
 	cancel()
 
@@ -171,49 +190,6 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 
-	loadScript := func(c *gin.Context) error {
-		var p struct {
-			Script string `form:"script"`
-		}
-
-		if err := c.ShouldBind(&p); err != nil {
-			c.AbortWithError(http.StatusBadRequest, err)
-			return err
-		}
-
-		script := strings.TrimSpace(p.Script)
-		if script == "" {
-			script = config.Script
-		}
-
-		err = ircbot.LoadScript(script)
-		if err != nil {
-			h := gin.H{
-				"error":       "script_error",
-				"description": err.Error(),
-			}
-
-			if perr, ok := err.(*parser.Error); ok {
-				h["line"] = perr.Pos.Line
-				h["column"] = perr.Pos.Column
-			}
-
-			c.AbortWithStatusJSON(http.StatusOK, h)
-			return err
-		}
-
-		config.Script = script
-		if err := config.Save(); err != nil {
-			log.Printf("cannot save config: %s", err)
-		}
-
-		event := RemoteEvent{}
-		event.Config.Buttons = ircbot.GetButtons()
-		remote.SetConfig(event)
-
-		return nil
-	}
-
 	r.POST("/rewards/:id/delete", func(c *gin.Context) {
 		err := broadcaster.DeleteReward(
 			c.Request.Context(),
@@ -267,6 +243,49 @@ func main() {
 		}
 	})
 
+	loadScript := func(c *gin.Context) error {
+		var p struct {
+			Script string `form:"script"`
+		}
+
+		if err := c.ShouldBind(&p); err != nil {
+			c.AbortWithError(http.StatusBadRequest, err)
+			return err
+		}
+
+		script := strings.TrimSpace(p.Script)
+		if script == "" {
+			script = config.Script
+		}
+
+		err = ircbot.LoadScript(script)
+		if err != nil {
+			h := gin.H{
+				"error":       "script_error",
+				"description": err.Error(),
+			}
+
+			if perr, ok := err.(*parser.Error); ok {
+				h["line"] = perr.Pos.Line
+				h["column"] = perr.Pos.Column
+			}
+
+			c.AbortWithStatusJSON(http.StatusOK, h)
+			return err
+		}
+
+		config.Script = script
+		if err := config.Save(); err != nil {
+			log.Printf("cannot save config: %s", err)
+		}
+
+		event := RemoteEvent{}
+		event.Config.Buttons = ircbot.GetButtons()
+		remote.SetConfig(event)
+
+		return nil
+	}
+
 	r.POST("/loadscript", func(c *gin.Context) {
 		err := loadScript(c)
 		if err != nil {
@@ -276,6 +295,14 @@ func main() {
 			c.Redirect(http.StatusFound, "/?tab=script")
 		} else {
 			c.JSON(http.StatusOK, gin.H{"ok": true})
+		}
+	})
+
+	r.GET("/check_csrf", func(c *gin.Context) {
+		if c.Query("csrf") != csrf {
+			c.JSON(http.StatusOK, gin.H{"valid": false})
+		} else {
+			c.JSON(http.StatusOK, gin.H{"valid": true})
 		}
 	})
 

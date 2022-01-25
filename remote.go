@@ -26,8 +26,9 @@ type Remote struct {
 
 	ImageCache map[string]string
 
-	conn *websocket.Conn
-	mu   sync.Mutex
+	conn       *websocket.Conn
+	connPubSub *websocket.Conn
+	mu         sync.Mutex
 }
 
 func NewRemote(bot *IRCBot) *Remote {
@@ -90,8 +91,9 @@ type RemoteEvent struct {
 	Config struct {
 		Buttons []*Command `json:"buttons"`
 	} `json:"config,omitempty"`
-	Balance int    `json:"balance,omitempty"`
-	Command string `json:"command,omitempty"`
+	Balance  int    `json:"balance,omitempty"`
+	Command  string `json:"command,omitempty"`
+	IsReward bool   `json:"is_reward,omitempty"`
 }
 
 func (r *Remote) readLoop() error {
@@ -114,14 +116,17 @@ func (r *Remote) readLoop() error {
 
 		log.Printf("ws: got event: %#v", event)
 
-		if event.Command != "" {
-			err := bot.ProcessMessage(
-				event.Origin,
-				"!"+event.Command,
-			)
-			if err != nil {
-				log.Println(err)
-			}
+		if event.Command == "" {
+			continue
+		}
+
+		err = bot.ProcessMessage(
+			context.WithValue(context.Background(), "is_reward", event.IsReward),
+			event.Origin,
+			"!"+event.Command,
+		)
+		if err != nil {
+			log.Println(err)
 		}
 	}
 }
@@ -177,6 +182,7 @@ func (r *Remote) checkRewards() error {
 					cmd.Cmd,
 				)
 				err := bot.ProcessMessage(
+					context.WithValue(context.Background(), "is_reward", true),
 					redemption.UserLogin,
 					"!"+cmd.Cmd,
 				)
@@ -184,9 +190,6 @@ func (r *Remote) checkRewards() error {
 					log.Println(err)
 				} else {
 					err = redemption.SetStatus(ctx, "FULFILLED")
-					if err != nil {
-						log.Printf("cannot change redemition status: %s", err)
-					}
 				}
 			} else {
 				log.Printf(
@@ -194,6 +197,10 @@ func (r *Remote) checkRewards() error {
 					redemption.UserLogin,
 					redemption.Reward.Title,
 				)
+				err = redemption.SetStatus(ctx, "CANCELED")
+			}
+			if err != nil {
+				log.Printf("cannot change redemition status: %s", err)
 			}
 		}
 		time.Sleep(time.Second)

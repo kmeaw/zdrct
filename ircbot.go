@@ -94,7 +94,7 @@ func (b *IRCBot) Reply(format string, rest ...interface{}) {
 	})
 }
 
-func (b *IRCBot) ProcessMessage(from, msg string) error {
+func (b *IRCBot) ProcessMessage(ctx context.Context, from, msg string) error {
 	flds := strings.Fields(msg)
 	if len(flds) == 0 {
 		return nil
@@ -125,7 +125,7 @@ func (b *IRCBot) ProcessMessage(from, msg string) error {
 
 		script := fmt.Sprintf("cmd_%s(%s)", cmd, strings.Join(args, ", "))
 		e := b.e.DeepCopy()
-		ctx := context.WithValue(context.Background(), "from_user", from)
+		ctx := context.WithValue(ctx, "from_user", from)
 
 		go func(ctx context.Context, e *env.Env) {
 			b.e.Set("eval", func(code string) interface{} {
@@ -171,7 +171,7 @@ func (b *IRCBot) Handle(c *irc.Client, m *irc.Message) {
 		}
 
 		from := m.Prefix.User
-		err := b.ProcessMessage(from, msg)
+		err := b.ProcessMessage(context.Background(), from, msg)
 		if err != nil {
 			log.Println(err)
 		}
@@ -207,7 +207,14 @@ func (b *IRCBot) LoadScript(script string) error {
 	b.RewardMap = map[string]*Command{}
 
 	b.e = env.NewEnv()
-	_, err := vm.Execute(b.e, nil, "func from() {\n return \"<FAIL>\"\n }\n")
+	_, err := vm.Execute(b.e, nil, `
+func from() {
+	return "<FAIL>"
+}
+func is_reward() {
+	return false
+}
+	`)
 	if err != nil {
 		return err
 	}
@@ -215,8 +222,14 @@ func (b *IRCBot) LoadScript(script string) error {
 	errors = append(errors, b.e.DefineType("Command", Command{}))
 	errors = append(errors, b.e.DefineType("Reward", Reward{}))
 	errors = append(errors, b.e.DefineType("Actor", Actor{}))
+	orig_is_reward, err := b.e.Get("is_reward")
 	orig_from, err := b.e.Get("from")
 	errors = append(errors, err)
+	errors = append(errors, b.e.Set("is_reward", func(ctx context.Context) (reflect.Value, reflect.Value) {
+		from := ctx.Value("is_reward")
+		_, err := orig_is_reward.(func(context.Context) (reflect.Value, reflect.Value))(ctx)
+		return reflect.ValueOf(from), err
+	}))
 	errors = append(errors, b.e.Set("from", func(ctx context.Context) (reflect.Value, reflect.Value) {
 		from := ctx.Value("from_user")
 		_, err := orig_from.(func(context.Context) (reflect.Value, reflect.Value))(ctx)
@@ -252,6 +265,8 @@ func (b *IRCBot) LoadScript(script string) error {
 		for _, reward := range b.tw_broadcaster.Rewards {
 			m[reward.Key()] = reward
 		}
+
+		reward.SetClient(b.tw_broadcaster)
 
 		if lr, ok := m[reward.Key()]; ok {
 			if lr.Prompt != reward.Prompt || lr.Cost != reward.Cost {

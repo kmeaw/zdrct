@@ -98,6 +98,14 @@ window.addEventListener('DOMContentLoaded', (event) => {
 	});
 
 	$submit.disabled = false;
+
+	setInterval(() => {
+		fetch('/check_csrf?csrf=' + encodeURIComponent(csrf))
+			.then((resp) => resp.json())
+			.then((j) => {
+				if (!j.valid) window.close();
+			});
+	}, 2000);
 });
 
 // vim: ai:ts=8:sw=8:noet:syntax=js
