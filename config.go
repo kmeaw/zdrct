@@ -52,6 +52,9 @@ cmd_balance = func() {
 
 func redeem(price, cmd) {
   return func(args...) {
+    if is_reward() {
+      return cmd(args...)
+    }
     b = balance(from())
     if b < price {
       reply("You have %d credits, but this command requires %d.", balance(from()), price)
@@ -64,22 +67,10 @@ func redeem(price, cmd) {
   }
 }
 
-func monster(class_name, name, sound) {
-  m = make(struct {
-    ClassName string,
-    Name string,
-    Sound string
-  })
-  m.ClassName = class_name
-  m.Name = name
-  m.Sound = sound
-  return m
-}
-
-func spawn_monster(m) {
-  if rcon("summon " + m.ClassName) {
-    alert(sprintf("%s has summoned a %s!", from(), m.Name), m.Name + ".png", m.Sound)
-    reply("%s has summoned a %s!", from(), m.Name)
+func spawn_actor(a) {
+  if rcon("summon %s", a.ID) {
+    actor_alert(a, from())
+    actor_reply(a, from())
     sleep(3)
     rcon("summon CrossbowAmmo")
     return true
@@ -88,19 +79,32 @@ func spawn_monster(m) {
   }
 }
 
-Golem = monster("Mummy", "golem", "mumsit.mp3")
-Gargoyle = monster("HereticImp", "gargoyle", "impsit.mp3")
+Golem = new(Actor)
+Golem.ID = "Mummy"
+Golem.Name = "Golem"
+Golem.AlertText = "{{ .From }} has summoned a {{ .Actor.Name }}!"
+Golem.AlertImage = "golem.png"
+Golem.AlertSound = "mumsit.mp3"
+Golem.Reply = "{{ .From }} has summoned a {{ .Actor.Name }}!"
+
+Gargoyle = new(Actor)
+Gargoyle.ID = "HereticImp"
+Gargoyle.Name = "Gargoyle"
+Gargoyle.AlertText = "{{ .From }} has summoned a flying {{ .Actor.Name }}!"
+Gargoyle.AlertImage = "gargoyle.png"
+Gargoyle.AlertSound = "impsit.mp3"
+Gargoyle.Reply = "{{ .From }} has summoned a flying {{ .Actor.Name }}!"
 
 cmd_golem = redeem(10, func() {
-  return spawn_monster(Golem)
+  return spawn_actor(Golem)
 })
 
 cmd_gargoyle = redeem(10, func() {
-  return spawn_monster(Gargoyle)
+  return spawn_actor(Gargoyle)
 })
 
 cmd_random = redeem(40, func() {
-  return spawn_monster(roll(1.0, Golem, 1.0, Gargoyle))
+  return spawn_actor(roll(1.0, Golem, 1.0, Gargoyle))
 })
 
 cmd_flask = redeem(5, func() {
@@ -144,6 +148,7 @@ button_flask.Text = "Quartz Flask"
 button_flask.Image = "QuartzFlask.gif"
 add_command(button_flask)
 
+button_gargoyle = new(Command)
 button_gargoyle = new(Command)
 button_gargoyle.Cmd = "gargoyle"
 button_gargoyle.Text = "Gargoyle"
@@ -315,7 +320,6 @@ func (c Config) ReadDir(dirname string) ([]string, error) {
 		if !entry.Type().IsRegular() {
 			continue
 		}
-
 		if strings.HasSuffix(entry.Name(), ".swp") || strings.HasPrefix(entry.Name(), ".") || strings.HasSuffix(entry.Name(), "~") {
 			continue
 		}

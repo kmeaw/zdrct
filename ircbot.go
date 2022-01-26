@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"text/template"
 	"time"
 
 	"github.com/mattn/anko/env"
@@ -20,6 +22,8 @@ import (
 
 type Actor struct {
 	ID         string `json:"id"`
+	Name       string `json:"name"`
+	AlertText  string `json:"alert_text,omitempty"`
 	AlertImage string `json:"alert_image,omitempty"`
 	AlertSound string `json:"alert_sound,omitempty"`
 	Reply      string `json:"reply,omitempty"`
@@ -302,6 +306,52 @@ func is_reward() {
 
 		b.Balances[name] = value
 	}))
+	errors = append(errors, b.e.Define("actor_alert", func(actor *Actor, from string) {
+		tmpl, err := template.New("actor_alert").Parse(actor.AlertText)
+		if err != nil {
+			log.Printf("template error: %s", err)
+			return
+		}
+		buf := &bytes.Buffer{}
+		err = tmpl.Execute(buf, map[string]interface{}{
+			"From":  from,
+			"Actor": actor,
+		})
+
+		b.mu.Lock()
+		defer b.mu.Unlock()
+
+		alert := AlertEvent{
+			Text:  buf.String(),
+			Image: actor.AlertImage,
+			Sound: actor.AlertSound,
+		}
+
+		log.Printf("alert(%q)", alert.Text)
+		b.Alerter.Broadcast(alert)
+	}))
+	errors = append(errors, b.e.Define("actor_reply", func(actor *Actor, from string) {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+
+		t0 := time.Now()
+		t1 := b.LastBuckets["reply"]
+		if t0.Before(t1) {
+			return
+		}
+		tmpl, err := template.New("actor_reply").Parse(actor.Reply)
+		if err != nil {
+			log.Printf("template error: %s", err)
+			return
+		}
+		buf := &bytes.Buffer{}
+		err = tmpl.Execute(buf, map[string]interface{}{
+			"From":  from,
+			"Actor": actor,
+		})
+		b.Reply("%s", buf.String())
+		b.LastBuckets["reply"] = time.Now().Add(time.Second)
+	}))
 	errors = append(errors, b.e.Define("reply", func(format string, args ...interface{}) {
 		b.mu.Lock()
 		defer b.mu.Unlock()
@@ -367,7 +417,7 @@ func is_reward() {
 		return n
 	}))
 	errors = append(errors, b.e.Define("join", strings.Join))
-	errors = append(errors, b.e.Define("rcon", func(cmd string) bool {
+	errors = append(errors, b.e.Define("rcon", func(format string, args ...interface{}) bool {
 		b.mu.Lock()
 		defer b.mu.Unlock()
 
@@ -375,7 +425,7 @@ func is_reward() {
 			return false
 		}
 
-		err := b.RconClient.Command(cmd)
+		err := b.RconClient.Command(fmt.Sprintf(format, args...))
 		if err != nil {
 			log.Printf("RCON error: %s", err)
 			return false
