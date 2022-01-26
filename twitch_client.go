@@ -529,7 +529,7 @@ func (r *Reward) GetRedemptions(ctx context.Context) ([]*Redemption, error) {
 	return v.Data, nil
 }
 
-func (r *Redemption) SetStatus(ctx context.Context, new_status string) error {
+func (r *Reward) SetRedemptionStatus(ctx context.Context, redemption_id, new_status string) error {
 	u, err := url.Parse(
 		"https://api.twitch.tv/helix/channel_points/custom_rewards/redemptions",
 	)
@@ -538,12 +538,12 @@ func (r *Redemption) SetStatus(ctx context.Context, new_status string) error {
 	}
 
 	qs := u.Query()
-	qs.Set("id", r.ID)
-	qs.Set("reward_id", r.Reward.ID)
+	qs.Set("id", redemption_id)
+	qs.Set("reward_id", r.ID)
 	u.RawQuery = qs.Encode()
 
 	var v twitchRewardsReply
-	err = r.Reward.tw.apiCall(
+	err = r.tw.apiCall(
 		ctx,
 		u.String(),
 		map[string]interface{}{
@@ -553,6 +553,15 @@ func (r *Redemption) SetStatus(ctx context.Context, new_status string) error {
 		&v,
 	)
 
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *Redemption) SetStatus(ctx context.Context, new_status string) error {
+	err := r.Reward.SetRedemptionStatus(ctx, r.ID, new_status)
 	if err != nil {
 		return err
 	}
