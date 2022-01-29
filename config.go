@@ -149,7 +149,6 @@ button_flask.Image = "QuartzFlask.gif"
 add_command(button_flask)
 
 button_gargoyle = new(Command)
-button_gargoyle = new(Command)
 button_gargoyle.Cmd = "gargoyle"
 button_gargoyle.Text = "Gargoyle"
 button_gargoyle.Image = "gargoyle.png"
@@ -166,6 +165,12 @@ reward_flask.Cost = 2
 reward_flask.Title = "Flask"
 reward_flask.IsEnabled = true
 map_reward(reward_flask, button_flask)
+
+reward_random = new(Reward)
+reward_random.Cost = 5
+reward_random.Title = "Random"
+reward_random.IsEnabled = true
+map_reward(reward_random, button_random)
 `
 }
 
@@ -332,6 +337,16 @@ func (c Config) ReadDir(dirname string) ([]string, error) {
 	}
 
 	return result, nil
+}
+
+func (c Config) WriteAsset(basename string, data []byte) error {
+	err := os.MkdirAll(filepath.Join(c.zdrctConfigDir, "assets"), 0777)
+	if err != nil && !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+
+	name := filepath.Join(c.zdrctConfigDir, "assets", basename)
+	return os.WriteFile(name, data, 0777)
 }
 
 func (c Config) InitAssetsTemplates(r *gin.Engine) error {

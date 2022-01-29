@@ -1,0 +1,78 @@
+      <div class="tab-pane fade{{ if eq .Tab "wizard" }} show active{{ end }}" id="nav-wizard" role="tabpanel" aria-labelledby="nav-wizard-tab">
+        <div class="container mt=5">
+          <div class="row">
+            <div class="col-sm-2">
+              <label for="doomexe">IWAD:</label>
+            </div>
+            <div class="col-sm-10">
+              <input type="file" id="wizard_iwad" accept=".wad" />
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-sm-12">
+	      <p id="wizard_msg"></p>
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-sm-2">
+              <label for="wizard_id">ID:</label>
+            </div>
+            <div class="col-sm-10">
+	      <input type="text" id="wizard_id" value="" placeholder="HereticImp" />
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-sm-2">
+              <label for="wizard_name">Name:</label>
+            </div>
+            <div class="col-sm-10">
+	      <input type="text" id="wizard_name" value="" placeholder="Gargoyle" />
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-sm-2">
+              <label for="wizard_reply">Reply:</label>
+            </div>
+            <div class="col-sm-10">
+	      <input type="text" id="wizard_reply" value="" placeholder="{{ "{{" }} .From {{ "}}" }} has summoned a {{ "{{" }} .Actor.Name {{ "}}" }}!" />
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-sm-2">
+              <label for="wizard_sound">Sound:</label>
+            </div>
+            <div class="col-sm-10">
+	      <select id="wizard_sound" disabled="disabled"></select>
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-sm-2">
+              <label for="wizard_image">Image:</label>
+            </div>
+            <div class="col-sm-10">
+	      <select id="wizard_image" disabled="disabled"></select>
+	      <select id="wizard_rescale">
+		<option value="0" selected>Do not rescale</option>
+		<option value="28">28x28</option>
+		<option value="56">56x56</option>
+		<option value="112">112x112</option>
+	      </select>
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-sm-12">
+	      <canvas width="0" height="0" id="wizard_lump_canvas"></canvas>
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-sm-12">
+	      <audio controls id="wizard_lump_audio"></audio>
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-sm-12">
+	      <button id="wizard_generate">Generate</button>
+            </div>
+          </div>
+        </div>
+      </div>

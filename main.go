@@ -539,6 +539,30 @@ func main() {
 		})
 	})
 
+	r.POST("/upload/assets/:name", func(c *gin.Context) {
+		data, err := c.GetRawData()
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, map[string]string{
+				"error":       "get_asset_failed",
+				"description": err.Error(),
+			})
+			log.Printf("get asset failed: %s", err)
+			return
+		}
+
+		err = config.WriteAsset(c.Param("name"), data)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, map[string]string{
+				"error":       "write_asset_failed",
+				"description": err.Error(),
+			})
+			log.Printf("write asset failed: %s", err)
+			return
+		}
+
+		c.JSON(http.StatusOK, map[string]bool{"ok": true})
+	})
+
 	l, err := net.Listen("tcp", "localhost:8666")
 	if err != nil {
 		log.Panic(err)

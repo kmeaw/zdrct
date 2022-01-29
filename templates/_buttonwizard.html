@@ -1,0 +1,49 @@
+      <div class="tab-pane fade{{ if eq .Tab "buttonwizard" }} show active{{ end }}" id="nav-buttonwizard" role="tabpanel" aria-labelledby="nav-buttonwizard-tab">
+        <div class="container mt=5">
+          <div class="row">
+            <div class="col-sm-2">
+              <label for="buttonwizard_id">Command name:</label>
+            </div>
+            <div class="col-sm-10">
+	      <input type="text" id="buttonwizard_id" value="" placeholder="gargoyle" />
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-sm-2">
+              <label for="buttonwizard_name">Text:</label>
+            </div>
+            <div class="col-sm-10">
+	      <input type="text" id="buttonwizard_name" value="" placeholder="Spawn a gargoyle" />
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-sm-2">
+              <label for="buttonwizard_name">Image:</label>
+            </div>
+            <div class="col-sm-10">
+	      <input type="text" id="buttonwizard_image" value="" />
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-sm-2">
+              <label for="buttonwizard_code">Code:</label>
+            </div>
+            <div class="col-sm-10">
+	      <textarea id="buttonwizard_code" rows="4" cols="80"></textarea>
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-sm-2">
+              <label for="buttonwizard_price">Price:</label>
+            </div>
+            <div class="col-sm-10">
+	      <input type="number" id="buttonwizard_price" value="1" min="0" />
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-sm-12">
+	      <button id="buttonwizard_generate">Generate</button>
+            </div>
+          </div>
+        </div>
+      </div>

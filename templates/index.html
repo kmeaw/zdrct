@@ -12,11 +12,14 @@
     </script>
     <script type="text/javascript" src="codemirror.js"></script>
     <script type="text/javascript" src="go.js"></script>
+    <script type="text/javascript" src="wad.js"></script>
     <script type="text/javascript" src="app.js"></script>
     <nav>
       <div class="nav nav-tabs" id="nav-tab" role="tablist">
 	<button class="nav-link{{ if eq .Tab "twitch" }} active{{ end }}" id="nav-twitch-tab" data-bs-toggle="tab" data-bs-target="#nav-twitch" type="button" role="tab" aria-controls="nav-twitch" aria-selected="true">Twitch</button>
 	<button class="nav-link{{ if eq .Tab "script" }} active{{ end }}" id="nav-script-tab" data-bs-toggle="tab" data-bs-target="#nav-script" type="button" role="tab" aria-controls="nav-script" aria-selected="false">Script</button>
+	<button class="nav-link{{ if eq .Tab "wizard" }} active{{ end }}" id="nav-wizard-tab" data-bs-toggle="tab" data-bs-target="#nav-wizard" type="button" role="tab" aria-controls="nav-wizard" aria-selected="false">Actors</button>
+	<button class="nav-link{{ if eq .Tab "buttonwizard" }} active{{ end }}" id="nav-buttonwizard-tab" data-bs-toggle="tab" data-bs-target="#nav-buttonwizard" type="button" role="tab" aria-controls="nav-buttonwizard" aria-selected="false">Buttons and rewards</button>
 	<button class="nav-link{{ if eq .Tab "doomexe" }} active{{ end }}" id="nav-doomexe-tab" data-bs-toggle="tab" data-bs-target="#nav-doomexe" type="button" role="tab" aria-controls="nav-doomexe" aria-selected="false">Doom exe and args</button>
 	<button class="nav-link{{ if eq .Tab "rcon" }} active{{ end }}" id="nav-rcon-tab" data-bs-toggle="tab" data-bs-target="#nav-rcon" type="button" role="tab" aria-controls="nav-rcon" aria-selected="false">RCon</button>
       </li>
@@ -26,6 +29,8 @@
       {{ template "_twitch" . }}
       {{ template "_doomexe" . }}
       {{ template "_script" . }}
+      {{ template "_wizard" . }}
+      {{ template "_buttonwizard" . }}
       {{ template "_rcon" . }}
 
     </div>
