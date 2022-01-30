@@ -2,6 +2,8 @@
 
 This program is designed to spawn some monsters in front of the streamer.
 
+[Demo gif](https://real.kmeaw.com/zdrct.gif)
+
 # Supported environments
 
 * Windows (x86_64)
