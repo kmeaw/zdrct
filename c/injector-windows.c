@@ -17,6 +17,7 @@ extern void* cdocommand_ptr_fast;
 extern void* cdocommand_ptr;
 #endif
 extern unsigned long rconserver(void*) __attribute__((stdcall));
+extern void printf_callback(void*) __attribute((stdcall));
 
 #define STACK_SIZE (8 * 1024 * 1024)
 
@@ -81,6 +82,56 @@ static void do_inject () {
     cdocommand_ptr = scan(PAGE_EXECUTE_READ, search_data_ref, toggle_idmypos);
     printf("C_DoCommand = %p\n", cdocommand_ptr);
 #endif
+
+    unsigned char *printf_call;
+    int32_t *call_offset = NULL;
+    printf("Patching Printf...\n");
+    for (printf_call = printf_ptr; *printf_call != 0xCC; printf_call++) {
+	    if ((printf_call[0] == 0xB9) && (printf_call[-1] & 0xF0) == 0x50) {
+		    unsigned char *trampoline = VirtualAlloc(NULL, 54, MEM_COMMIT|MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+		    memset(trampoline, 0x90, 42);
+		    uint32_t imm32 = 0;
+		    trampoline[0] = 0x60; // PUSHA
+		    trampoline[1] = 0x68; memcpy(trampoline + 2, &imm32, sizeof(imm32)); // PUSH 0
+		    trampoline[6] = 0x68; memcpy(trampoline + 7, &imm32, sizeof(imm32)); // PUSH 0
+		    /*
+		    imm32 = 0x12345678;
+		    trampoline[11] = 0x68; memcpy(trampoline + 12, &imm32, sizeof(imm32)); // PUSH 0x12345678
+		    */
+		    trampoline[11] = 0x54;
+		    imm32 = (uint32_t) (long) printf_callback;
+		    trampoline[16] = 0x68; memcpy(trampoline + 17, &imm32, sizeof(imm32)); // PUSH printf_callback
+		    imm32 = STACK_SIZE;
+		    trampoline[21] = 0x68; memcpy(trampoline + 22, &imm32, sizeof(imm32)); // PUSH STACK_SIZE
+		    imm32 = 0;
+		    trampoline[26] = 0x68; memcpy(trampoline + 27, &imm32, sizeof(imm32)); // PUSH 0
+		    imm32 = ((long) &CreateThread) - ((long) &trampoline[36]);
+		    trampoline[31] = 0xE8; memcpy(trampoline + 32, &imm32, sizeof(imm32)); // CALL CreateThread
+		    printf("CreateThread = %p\n", &CreateThread);
+		    imm32 = INFINITE;
+		    trampoline[36] = 0x68; memcpy(trampoline + 37, &imm32, sizeof(imm32)); // PUSH INFINITE
+		    trampoline[41] = 0x50; // PUSH handle
+		    imm32 = ((long) &WaitForSingleObject) - ((long) &trampoline[47]);
+		    trampoline[42] = 0xE8; memcpy(trampoline + 43, &imm32, sizeof(imm32)); // CALL WaitForSingleObject
+		    trampoline[47] = 0x61; // POPA
+		    memcpy(trampoline + 48, printf_call, 5);
+		    trampoline[53] = 0xC3; // RET
+
+		    call_offset = ((long)trampoline) - ((long)&printf_call[5]);
+		    unsigned char call_rel32 = 0xE8;
+		    if (!WriteProcessMemory(GetCurrentProcess(), printf_call, &call_rel32, sizeof(call_rel32), NULL)) {
+			    printf("WriteProcessMemory has failed: %d\n", GetLastError());
+		    }
+		    if (!WriteProcessMemory(GetCurrentProcess(), printf_call + 1, &call_offset, sizeof(call_offset), NULL)) {
+			    printf("WriteProcessMemory has failed: %d\n", GetLastError());
+		    }
+	    }
+    }
+    if (call_offset == NULL) {
+	    printf("Could not find CALL inside Printf.\n");
+    } else {
+	    printf("Call target of Printf has been changed to %p.\n", printf_callback);
+    }
 
     if (CreateThread(NULL, STACK_SIZE, rconserver, NULL, 0, NULL) == INVALID_HANDLE_VALUE) {
         perror("clone");

@@ -57,10 +57,40 @@ static void cons_perror(const char *prefix) {
 #define CLRC_COMMAND 54
 
 #define SVRC_LOGGEDIN 35
+#define SVRC_MESSAGE  37
 
 int s = -1;
+int is_ready = 0;
 
 static struct sockaddr_in console_receiver;
+
+#ifdef WIN32
+unsigned long __attribute__((stdcall))
+#else
+void
+#endif
+printf_callback(void **stackptr) {
+	static char buf[4096] = {0xFF, SVRC_MESSAGE};
+	int rmt_sz = sizeof(console_receiver);
+	int n = 0;
+	if (is_ready) {
+		if (stackptr != NULL) {
+			n = vsnprintf(buf + 2, sizeof(buf) - 3, stackptr[13], &stackptr[14]);
+			if (n < 0) {
+				strcpy(buf + 2, "ERROR");
+				n = 5;
+			}
+			n += 2;
+		} else {
+			strcpy(buf + 2, "NULL");
+			n += 4;
+		}
+		sendto(s, buf, n, 0, (struct sockaddr *) &console_receiver, rmt_sz);
+	}
+#ifdef WIN32
+	return 0;
+#endif
+}
 
 #ifdef WIN32
 unsigned long __attribute__((stdcall))
@@ -125,6 +155,7 @@ rconserver(__attribute__((unused)) void* _unused0) {
                 cons_perror("send");
             }
             memcpy(&console_receiver, &rmt, rmt_sz);
+	    is_ready = 1;
             break;
 
         case CLRC_COMMAND:

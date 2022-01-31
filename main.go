@@ -507,6 +507,12 @@ func main() {
 			return
 		}
 
+		go func() {
+			for msg := range rcon.Messages() {
+				log.Printf("Got message: %q", msg)
+			}
+		} ()
+
 		config.RconAddress = p.Addr
 		config.RconPassword = p.Password
 		if err := config.Save(); err != nil {
