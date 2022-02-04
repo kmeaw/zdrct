@@ -19,7 +19,15 @@ extern void* cdocommand_ptr;
 extern unsigned long rconserver(void*) __attribute__((stdcall));
 extern void printf_callback(void*) __attribute((stdcall));
 
+extern void* console_player;
+extern int (*P_GiveArtifact)(void *player, int artifact, void *mo);
+
 #define STACK_SIZE (8 * 1024 * 1024)
+typedef char bool;
+#ifndef TRUE
+# define TRUE 1
+# define FALSE 0
+#endif
 
 static void *memmem(const void *haystack, size_t haystack_len,
                     const void * const needle, const size_t needle_len)
@@ -57,13 +65,7 @@ static void* scan(const DWORD perm_filter, void*(*cb)(void *, size_t, void *), v
     return ptr;
 }
 
-static void do_inject () {
-    void *script_error = scan(PAGE_READONLY, search_string_cb, "\034GScript error, \"%s\" line %d:");
-    void *toggle_idmypos = scan(PAGE_READONLY, search_string_cb, "toggle idmypos");
-
-    if (script_error == NULL || toggle_idmypos == NULL)
-        return;
-
+static bool patch_zdoom(void *script_error, void *toggle_idmypos) {
     printf("script_error = %p\n", script_error);
     printf("toggle_idmypos = %p\n", toggle_idmypos);
 
@@ -117,7 +119,7 @@ static void do_inject () {
 		    memcpy(trampoline + 48, printf_call, 5);
 		    trampoline[53] = 0xC3; // RET
 
-		    call_offset = ((long)trampoline) - ((long)&printf_call[5]);
+		    call_offset = (int32_t *) ((long)trampoline) - ((long)&printf_call[5]);
 		    unsigned char call_rel32 = 0xE8;
 		    if (!WriteProcessMemory(GetCurrentProcess(), printf_call, &call_rel32, sizeof(call_rel32), NULL)) {
 			    printf("WriteProcessMemory has failed: %d\n", GetLastError());
@@ -133,8 +135,70 @@ static void do_inject () {
 	    printf("Call target of Printf has been changed to %p.\n", printf_callback);
     }
 
-    if (CreateThread(NULL, STACK_SIZE, rconserver, NULL, 0, NULL) == INVALID_HANDLE_VALUE) {
-        perror("clone");
+    return TRUE;
+}
+
+static bool patch_russian_doom(void *you_got_it, void *a_secret_is_revealed) {
+	/* Find the language branch
+	   MOV DWORD PTR DS:[CCC458],russian-.00B64>;  ASCII "CHOOSE AN ARTIFACT ( A - J )"
+	 */
+
+	void* load_english = scan(PAGE_EXECUTE_READ, search_data_store, you_got_it);
+	printf("load_english = %p\n", load_english);
+
+	if (load_english == NULL)
+		return FALSE;
+
+	void* cheat_func3 = scan(PAGE_EXECUTE_READ, search_data_load_func, load_english);
+	printf ("cheat_func3 = %p\n", cheat_func3);
+
+	if (cheat_func3 == NULL)
+		return FALSE;
+
+	struct ArgValue av = {
+		.func = cheat_func3,
+		.arg = 2,
+		.value = 0,
+	};
+
+	P_GiveArtifact = scan(PAGE_EXECUTE_READ, search_load_arg, &av);
+	printf ("P_GiveArtifact = %p\n", P_GiveArtifact);
+
+	void *load_english2 = scan(PAGE_EXECUTE_READ, search_data_store, a_secret_is_revealed);
+	printf ("load_english2 = %p\n", load_english2);
+
+	if (load_english2 == NULL)
+		return FALSE;
+
+	void* sector9_handler = scan(PAGE_EXECUTE_READ, search_data_load, load_english2);
+	printf ("sector9_handler = %p\n", sector9_handler);
+
+	if (sector9_handler == NULL)
+		return FALSE;
+
+	console_player = scan(PAGE_EXECUTE_READ, search_mul_add, sector9_handler);
+	printf ("console_player = %p\n", console_player);
+
+	return TRUE;
+}
+
+static void do_inject () {
+    void *script_error = scan(PAGE_READONLY, search_string_cb, "\034GScript error, \"%s\" line %d:");
+    void *toggle_idmypos = scan(PAGE_READONLY, search_string_cb, "toggle idmypos");
+    void *you_got_it = scan(PAGE_READONLY, search_string_cb, "YOU GOT IT");
+    void *a_secret_is_revealed = scan(PAGE_READONLY, search_string_cb, "A SECRET IS REVEALED");
+    bool success = FALSE;
+
+    if (script_error != NULL && toggle_idmypos != NULL) {
+	    success = patch_zdoom(script_error, toggle_idmypos);
+    } else if (you_got_it != NULL && a_secret_is_revealed != NULL) {
+	    success = patch_russian_doom(you_got_it, a_secret_is_revealed);
+    }
+
+    if (success) {
+	    if (CreateThread(NULL, STACK_SIZE, rconserver, NULL, 0, NULL) == INVALID_HANDLE_VALUE) {
+		perror("clone");
+	    }
     }
 }
 

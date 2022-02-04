@@ -21,6 +21,8 @@ __attribute__((fastcall))
 void (*cdocommand_ptr) (const char *, int);
 #endif
 
+void* console_player;
+int (*P_GiveArtifact)(void *player, int artifact, void *mo);
 
 static void cons_perror(const char *prefix) {
     static char errmsg[512 + 12] = "echo ERROR: ";
@@ -161,24 +163,28 @@ rconserver(__attribute__((unused)) void* _unused0) {
         case CLRC_COMMAND:
             if (
 #ifdef WIN32
-                cdocommand_ptr_std == NULL
-                && cdocommand_ptr_fast == NULL
+                cdocommand_ptr_std != NULL
+                || cdocommand_ptr_fast != NULL
 #else
-                cdocommand_ptr == NULL
+                cdocommand_ptr != NULL
 #endif
-            ) {
-                fprintf(stderr, "console is not initialized, dropping message: %s\n", buf + 2);
-            } else {
+	    ) {
 #ifdef WIN32
                 if (cdocommand_ptr_std != NULL)
                     (*cdocommand_ptr_std) (buf + 2, 0);
                 else if (cdocommand_ptr_fast != NULL)
                     (*cdocommand_ptr_fast) (buf + 2, 0);
 #else
-                (*cdocommand_ptr) (buf + 2, 0);
+		if (cdocommand_ptr != NULL)
+                    (*cdocommand_ptr) (buf + 2, 0);
+		printf("C_DoCommand(%s);\n", buf + 2);
 #endif
-            }
-            printf("C_DoCommand(%s);\n", buf + 2);
+            } else if (console_player != NULL && P_GiveArtifact != NULL) {
+		    printf("P_GiveArtifact (%p, 1, NULL);\n", console_player);
+		    (*P_GiveArtifact) (console_player, 1, NULL);
+	    } else {
+                printf("console is not initialized, dropping message: %s\n", buf + 2);
+	    }
             break;
         }
     }
