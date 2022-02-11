@@ -213,4 +213,8 @@ BOOL WINAPI DllMain(__attribute__((unused)) HANDLE hDllHandle, __attribute__((un
     return TRUE;
 }
 
+void WINAPI StartServer(__attribute__((unused)) void *ptr) {
+	puts("injector: Hello, World!");
+}
+
 void WINAPI __declspec(dllexport) empty_function_dummy() {}

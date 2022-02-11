@@ -1,3 +1,6 @@
+//go:build windows
+// +build windows
+
 /**
  * Copyright 2022 kmeaw
  *
@@ -6,7 +9,7 @@
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU Affero General Public License as published by the
  * Free Software Foundation, version 3 of the License.
- * 
+ *
  * This program is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Affero General Public License
@@ -15,8 +18,6 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-//go:build windows
-// +build windows
 
 package main
 
@@ -27,8 +28,10 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -43,28 +46,6 @@ func S(input string) *uint16 {
 	}
 
 	return &u[0]
-}
-
-var shellcode = []byte{
-	0x31, 0xC9, 0x64, 0x8B, 0x41, 0x30, // Find PEB
-	0x8B, 0x40, 0x0C, 0x8B, 0x70, 0x14,
-	0xAD, 0x96, 0xAD, 0x8B, 0x58, 0x10, 0x8B, 0x53, 0x3C, 0x01, 0xDA, 0x8B,
-	0x52, 0x78, 0x01, 0xDA, 0x8B, 0x72, 0x20, 0x01, 0xDE, 0x31, 0xC9,
-
-	// Find GetProcAddress
-	0x41,
-	0xAD, 0x01, 0xD8, 0x81, 0x38, 0x47, 0x65, 0x74, 0x50, 0x75, 0xF4, 0x81,
-	0x78, 0x04, 0x72, 0x6F, 0x63, 0x41, 0x75, 0xEB, 0x81, 0x78, 0x08, 0x64,
-	0x64, 0x72, 0x65, 0x75, 0xE2, 0x8B, 0x72, 0x24, 0x01, 0xDE, 0x66, 0x8B,
-	0x0C, 0x4E, 0x49, 0x8B, 0x72, 0x1C, 0x01, 0xDE, 0x8B, 0x14, 0x8E, 0x01,
-	0xDA, 0x31, 0xC9, 0x53, 0x52, 0x51,
-	0x68, 0x61, 0x72, 0x79, 0x57, // aryW
-	0x68, 0x4C, 0x69, 0x62, 0x72, // Libr
-	0x68, 0x4C, 0x6F, 0x61, 0x64, // Load
-	0x54,             // PUSH "LoadLibraryW"
-	0x53, 0xFF, 0xD2, // GetProcAddress("LoadLibraryW")
-	0x83, 0xC4, 0x18, // restore stack
-	0xFF, 0xE0, // jmp LoadLibraryW(arg0)
 }
 
 var sounds map[string]string
@@ -131,11 +112,77 @@ func PlaySound(filename string) error {
 	return nil
 }
 
-func inject(exePath string, args ...string) error {
-	wd, err := os.Getwd()
+func patch_zdoom(patcher *Patcher) error {
+	script_error := patcher.ScanString("\034GScript error, \"%s\" line %d:")
+	Printf, err := script_error.LoadDataRef().Result()
 	if err != nil {
 		return err
 	}
+
+	toggle_idmypos := patcher.ScanString("toggle idmypos")
+	C_DoCommand := toggle_idmypos.LoadDataRef()
+	if err := C_DoCommand.Error(); err != nil {
+		return err
+	}
+
+	log.Printf("Printf = %x", Printf)
+	log.Printf("C_DoCommand = %x", C_DoCommand)
+
+	go func() {
+		// TODO: implement rcon server
+		time.Sleep(time.Second * 10)
+		err := C_DoCommand.Call("say hi")
+		if err != nil {
+			log.Printf("Call has failed: %s", err)
+		}
+	}()
+
+	return nil
+}
+
+func patch_russian_doom(patcher *Patcher) error {
+	you_got_it := patcher.ScanString("YOU GOT IT")
+	load_language_string := you_got_it.StoreRef()
+	cheat_func3 := load_language_string.LoadRef()
+	cheat_func3 = cheat_func3.FuncAlign()
+	p_GiveArtifact, err := cheat_func3.ArgRef(2, patcher.Nil()).Result()
+	if err != nil {
+		return err
+	}
+
+	a_secret_is_revealed := patcher.ScanString("A SECRET IS REVEALED")
+	load_language_string2 := a_secret_is_revealed.StoreRef()
+	sector9_handler := load_language_string2.LoadRef()
+	console_player, err := sector9_handler.MulAdd().Result()
+	if err != nil {
+		return err
+	}
+
+	log.Printf("console_player: %x", console_player)
+	log.Printf("P_GiveArtifact: %x", p_GiveArtifact)
+
+	return nil
+}
+
+const (
+	EXCEPTION_DEBUG_EVENT      = 1
+	CREATE_THREAD_DEBUG_EVENT  = 2
+	CREATE_PROCESS_DEBUG_EVENT = 3
+	EXIT_THREAD_DEBUG_EVENT    = 4
+	EXIT_PROCESS_DEBUG_EVENT   = 5
+	LOAD_DLL_DEBUG_EVENT       = 6
+	UNLOAD_DLL_DEBUG_EVENT     = 7
+	OUTPUT_DEBUG_STRING_EVENT  = 8
+	RIP_EVENT                  = 9
+)
+
+const (
+	DBG_CONTINUE = 0x00010002
+)
+
+func inject(exePath string, args ...string) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 
 	dir, file := filepath.Split(exePath)
 	if dir != "" {
@@ -146,23 +193,23 @@ func inject(exePath string, args ...string) error {
 	}
 
 	kernel32 := windows.NewLazySystemDLL("kernel32.dll")
-	err = kernel32.Load()
+	err := kernel32.Load()
 	if err != nil {
 		return err
 	}
 
 	log.Println("kernel32.dll has been loaded")
 
-	WriteProcessMemory := kernel32.NewProc("WriteProcessMemory")
-	VirtualAllocEx := kernel32.NewProc("VirtualAllocEx")
-	CreateRemoteThread := kernel32.NewProc("CreateRemoteThread")
-	LoadLibraryW := kernel32.NewProc("LoadLibraryW")
+	WaitForDebugEventEx := kernel32.NewProc("WaitForDebugEventEx")
+	DebugActiveProcessStop := kernel32.NewProc("DebugActiveProcessStop")
+	ContinueDebugEvent := kernel32.NewProc("ContinueDebugEvent")
+	ReadProcessMemory := kernel32.NewProc("ReadProcessMemory")
 
 	for _, proc := range []*windows.LazyProc{
-		WriteProcessMemory,
-		VirtualAllocEx,
-		CreateRemoteThread,
-		LoadLibraryW,
+		WaitForDebugEventEx,
+		DebugActiveProcessStop,
+		ContinueDebugEvent,
+		ReadProcessMemory,
 	} {
 		err = proc.Find()
 		if err != nil {
@@ -177,7 +224,10 @@ func inject(exePath string, args ...string) error {
 		nil,
 		S(strings.Join(append([]string{file}, args...), " ")),
 		nil, nil, false,
-		windows.CREATE_SUSPENDED,
+		windows.NORMAL_PRIORITY_CLASS|
+			windows.CREATE_NEW_CONSOLE|
+			windows.CREATE_NEW_PROCESS_GROUP|
+			windows.CREATE_SUSPENDED,
 		nil,
 		nil,
 		&si,
@@ -191,110 +241,27 @@ func inject(exePath string, args ...string) error {
 
 	defer func() {
 		if pi.Process != 0 {
+			log.Printf("Terminating process %d", pi.ProcessId)
 			windows.TerminateProcess(pi.Process, 1)
 		}
 	}()
 
-	var isWow64 bool
-	var xpage uintptr
-
-	err = windows.IsWow64Process(pi.Process, &isWow64)
-
-	var libinjector_name string
-	if isWow64 {
-		libinjector_name = filepath.Join(wd, "libinjector32.dll")
-	} else {
-		libinjector_name = filepath.Join(wd, "libinjector64.dll")
-	}
-
-	log.Printf("libinjector is %q", libinjector_name)
-
-	page, _, err := VirtualAllocEx.Call(
-		uintptr(pi.Process),
-		0,
-		windows.MAX_PATH,
-		windows.MEM_COMMIT|windows.MEM_RESERVE,
-		windows.PAGE_READWRITE,
-	)
-	if err != nil && err != ERROR_OKAY {
-		return fmt.Errorf("cannot create an empty rw page: %w", err)
-	}
-
-	log.Printf("I have allocated a page %x inside the process.", page)
-
-	if isWow64 {
-		xpage, _, err = VirtualAllocEx.Call(
-			uintptr(pi.Process),
-			0,
-			windows.MAX_PATH,
-			windows.MEM_COMMIT|windows.MEM_RESERVE,
-			windows.PAGE_EXECUTE_READWRITE,
-		)
-		if err != nil && err != ERROR_OKAY {
-			return fmt.Errorf("cannot create an empty rwx page: %w", err)
-		}
-
-		log.Printf("I have allocated an executable page %x inside the process.", xpage)
-	} else {
-		xpage = LoadLibraryW.Addr()
-	}
-
-	_, _, err = WriteProcessMemory.Call(
-		uintptr(pi.Process),
-		page,
-		uintptr(unsafe.Pointer(S(libinjector_name))),
-		uintptr(len(libinjector_name)*2),
-		0,
-	)
-	if err != nil && err != ERROR_OKAY {
-		return fmt.Errorf("cannot write into process data memory: %w", err)
-	}
-
-	if isWow64 {
-		_, _, err = WriteProcessMemory.Call(
-			uintptr(pi.Process),
-			xpage,
-			uintptr(unsafe.Pointer(&shellcode[0])),
-			uintptr(len(shellcode)),
-			0,
-		)
-		if err != nil && err != ERROR_OKAY {
-			return fmt.Errorf("cannot write into process code memory: %w", err)
-		}
-
-		log.Println("WriteProcessMemory has succeeded.")
-	}
-
-	var threadId uintptr
-
-	log.Printf("LoadLibraryW addr is %x", LoadLibraryW.Addr())
-
-	threadHandle, _, err := CreateRemoteThread.Call(
-		uintptr(pi.Process),                // [in] HANDLE hProcess,
-		0,                                  // [in]  LPSECURITY_ATTRIBUTES  lpThreadAttributes,
-		0,                                  // [in]  SIZE_T                 dwStackSize,
-		xpage,                              // [in] LPTHREAD_START_ROUTINE lpStartAddress,
-		page,                               // [in] LPVOID lpParameter,
-		0,                                  // [in] DWORD dwCreationFlags,
-		uintptr(unsafe.Pointer(&threadId)), // [out] LPDWORD                lpThreadId
-	)
-	if err != nil && err != ERROR_OKAY {
-		return fmt.Errorf("cannot create remote thread: %w", err)
-	}
-
-	defer windows.CloseHandle(windows.Handle(threadHandle))
-
-	log.Printf("CreateRemoteThread has succeeded, threadid=%d, waiting for DllMain to return...", threadId)
-
-	r, err := windows.WaitForSingleObject(
-		windows.Handle(threadHandle),
-		windows.INFINITE,
-	)
+	patcher, err := NewPatcher(pi.Process, pi.Thread, file)
 	if err != nil {
-		return fmt.Errorf("cannot wait for DllMain to finish: %w", err)
+		return err
 	}
 
-	log.Printf("WaitForSingleObject returns %x", r)
+	/*
+		err := patch_russian_doom(patcher)
+		if err != nil {
+			return err
+		}
+	*/
+
+	err = patch_zdoom(patcher)
+	if err != nil {
+		return err
+	}
 
 	_, err = windows.ResumeThread(pi.Thread)
 	if err != nil {
