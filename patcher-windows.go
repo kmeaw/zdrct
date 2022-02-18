@@ -25,6 +25,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"runtime"
 	"unsafe"
 
@@ -55,6 +56,7 @@ type Patcher struct {
 	hThread              windows.Handle
 	EnumProcessModulesEx *windows.LazyProc
 	VirtualAllocEx       *windows.LazyProc
+	VirtualFreeEx        *windows.LazyProc
 	VirtualQueryEx       *windows.LazyProc
 	GetModuleFileNameEx  *windows.LazyProc
 	ReadProcessMemory    *windows.LazyProc
@@ -65,6 +67,8 @@ type Patcher struct {
 
 	Scratch     uintptr
 	ExecScratch uintptr
+
+	RconServer *RconServer
 }
 
 const LIST_MODULES_ALL = 0x03
@@ -77,7 +81,7 @@ type PatchState struct {
 	FastCall bool
 }
 
-func NewPatcher(hProcess, hThread windows.Handle, exeName string) (*Patcher, error) {
+func NewPatcher(hProcess, hThread windows.Handle, exeName string, rconPassword string) (*Patcher, error) {
 	var isWow64 bool
 	err := windows.IsWow64Process(hProcess, &isWow64)
 	if err != nil {
@@ -100,6 +104,12 @@ func NewPatcher(hProcess, hThread windows.Handle, exeName string) (*Patcher, err
 	err = vax.Find()
 	if err != nil {
 		return nil, fmt.Errorf("could not find VirtualAllocEx: %w", err)
+	}
+
+	vfx := kernel32.NewProc("VirtualFreeEx")
+	err = vax.Find()
+	if err != nil {
+		return nil, fmt.Errorf("could not find VirtualFreeEx: %w", err)
 	}
 
 	vqx := kernel32.NewProc("VirtualQueryEx")
@@ -177,12 +187,20 @@ func NewPatcher(hProcess, hThread windows.Handle, exeName string) (*Patcher, err
 		is64 = true
 	}
 
+	rconServer, err := NewRconServer(rconPassword)
+	if err != nil {
+		return nil, fmt.Errorf("cannot start rcon server: %w", err)
+	}
+
+	go rconServer.Start()
+
 	return &Patcher{
 		is64:                 is64,
 		exeName:              exeName,
 		hProcess:             hProcess,
 		hThread:              hThread,
 		VirtualAllocEx:       vax,
+		VirtualFreeEx:        vfx,
 		VirtualQueryEx:       vqx,
 		EnumProcessModulesEx: epmx,
 		GetModuleFileNameEx:  gmfne,
@@ -194,10 +212,22 @@ func NewPatcher(hProcess, hThread windows.Handle, exeName string) (*Patcher, err
 
 		Scratch:     scratch,
 		ExecScratch: xscratch,
+		RconServer:  rconServer,
 	}, nil
 }
 
 const MEM_FREE = 0x10000
+
+func (p *Patcher) ExecRconCommands(C_DoCommand *PatchState) {
+	go func() {
+		for cmd := range p.RconServer.Commands() {
+			err := C_DoCommand.Call(cmd)
+			if err != nil {
+				log.Printf("Call has failed: %s", err)
+			}
+		}
+	}()
+}
 
 func (p *Patcher) readptr(buf []byte, idx int) uintptr {
 	if p.is64 {
@@ -370,6 +400,42 @@ func (p *Patcher) search_mul_add(ptr uintptr, size int, arg interface{}) (interf
 
 	// TODO: check if it is 64-bit safe
 	return uintptr(binary.LittleEndian.Uint32(buf[0xe+1:])), nil
+}
+
+func (p *Patcher) MakeExecPage(code []byte) (uintptr, error) {
+	page_size := len(code) + 4095
+	page_size -= page_size % 4096
+	addr, _, err := p.VirtualAllocEx.Call(
+		uintptr(p.hProcess),
+		0,
+		uintptr(page_size),
+		windows.MEM_COMMIT|windows.MEM_RESERVE,
+		windows.PAGE_EXECUTE_READWRITE,
+	)
+	if err != nil && err != ERROR_OKAY {
+		return 0, fmt.Errorf("could not allocate the executable scratch page: %w", err)
+	}
+
+	_, _, err = p.WriteProcessMemory.Call(
+		uintptr(p.hProcess),
+		addr,
+		uintptr(unsafe.Pointer(&code[0])),
+		uintptr(len(code)),
+		0,
+	)
+
+	if err != nil && err != ERROR_OKAY {
+		p.VirtualFreeEx.Call(
+			uintptr(p.hProcess),
+			addr,
+			uintptr(page_size),
+			0,
+		)
+
+		return 0, fmt.Errorf("cannot write to new page: %w", err)
+	}
+
+	return addr, nil
 }
 
 func (p *Patcher) search_data_ref(ptr uintptr, size int, arg interface{}) (interface{}, error) {
@@ -614,7 +680,7 @@ func (p *Patcher) ScanString(s string) *PatchState {
 	if err != nil {
 		return &PatchState{
 			Patcher: p,
-			Err:     fmt.Errorf("error while searching for %q: %w", err),
+			Err:     fmt.Errorf("error while searching for %q: %w", s, err),
 		}
 	}
 
@@ -623,6 +689,90 @@ func (p *Patcher) ScanString(s string) *PatchState {
 		String:  fmt.Sprintf("%q", s),
 		result:  result.(uintptr),
 	}
+}
+
+func (ps *PatchState) PatchPrintf() error {
+	if ps.Err != nil {
+		return ps.Err
+	}
+
+	buf := make([]byte, 54)
+	for i := range buf {
+		buf[i] = 0x90 // NOP
+	}
+
+	for printf_call := ps.result; ; printf_call += 1 {
+		printf_buf, err := ps.Patcher.read(printf_call-1, 6)
+		if err != nil {
+			return err
+		}
+
+		if printf_buf[1] == 0xCC {
+			break
+		}
+
+		if printf_buf[1] != 0xB9 { // mov ecx, imm32
+			continue
+		}
+
+		if (printf_buf[0] & 0xF0) != 0x50 { // PUSH reg
+			continue
+		}
+
+		var imm32 uint32
+		buf[0] = 0x60 // PUSHA
+		buf[1] = 0x68 // PUSH 0
+		binary.LittleEndian.PutUint32(buf[2:], imm32)
+		buf[6] = 0x68 // PUSH 0
+		binary.LittleEndian.PutUint32(buf[7:], imm32)
+		buf[11] = 0x54 // PUSH esp
+		buf[16] = 0x68 // TODO: PUSH printf_callback
+		imm32 = 0
+		buf[21] = 0x68 // PUSH STACK_SIZE
+		binary.LittleEndian.PutUint32(buf[22:], imm32)
+		buf[26] = 0x68 // PUSH 0
+		binary.LittleEndian.PutUint32(buf[27:], imm32)
+
+		imm32 = 0      // TODO: ((long) &CreateThread) - ((long) &buf[36]);
+		buf[31] = 0xE8 // CALL CreateThread
+		binary.LittleEndian.PutUint32(buf[32:], imm32)
+
+		imm32 = windows.INFINITE
+		buf[36] = 0x68 // PUSH INFINITE
+		binary.LittleEndian.PutUint32(buf[37:], imm32)
+		buf[41] = 0x50 // PUSH handle
+		imm32 = 0      // TODO: ((long) &WaitForSingleObject) - ((long) &buf[47]);
+		buf[42] = 0xE8 // CALL WaitForSingleObject
+		binary.LittleEndian.PutUint32(buf[43:], imm32)
+		buf[47] = 0x61 // POPA
+		binary.LittleEndian.PutUint32(buf[48:], uint32(printf_call))
+		copy(buf[48:53], printf_buf[1:6]) // orig MOV ecx, imm32
+		buf[53] = 0xC3                    // RET
+
+		trampoline, err := ps.Patcher.MakeExecPage(buf)
+		if err != nil {
+			return err
+		}
+
+		call_offset := trampoline - (printf_call + 5)
+		call_buf := [5]byte{0xE8}
+		binary.LittleEndian.PutUint32(call_buf[1:], uint32(call_offset))
+
+		_, _, err = ps.Patcher.WriteProcessMemory.Call(
+			uintptr(ps.Patcher.hProcess),
+			ps.result,
+			uintptr(unsafe.Pointer(&call_buf[0])),
+			uintptr(len(call_buf)),
+			0,
+		)
+		if err != nil && err != ERROR_OKAY {
+			return err
+		}
+
+		return nil
+	}
+
+	return fmt.Errorf("cannot find MOV ecx, imm32 in Printf: %x", ps.result)
 }
 
 func (ps *PatchState) StoreRef() *PatchState {

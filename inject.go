@@ -31,9 +31,10 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
-	"time"
 	"unsafe"
 
+	"github.com/mattn/anko/env"
+	"github.com/mattn/anko/vm"
 	"golang.org/x/sys/windows"
 )
 
@@ -112,34 +113,6 @@ func PlaySound(filename string) error {
 	return nil
 }
 
-func patch_zdoom(patcher *Patcher) error {
-	script_error := patcher.ScanString("\034GScript error, \"%s\" line %d:")
-	Printf, err := script_error.LoadDataRef().Result()
-	if err != nil {
-		return err
-	}
-
-	toggle_idmypos := patcher.ScanString("toggle idmypos")
-	C_DoCommand := toggle_idmypos.LoadDataRef()
-	if err := C_DoCommand.Error(); err != nil {
-		return err
-	}
-
-	log.Printf("Printf = %x", Printf)
-	log.Printf("C_DoCommand = %x", C_DoCommand)
-
-	go func() {
-		// TODO: implement rcon server
-		time.Sleep(time.Second * 10)
-		err := C_DoCommand.Call("say hi")
-		if err != nil {
-			log.Printf("Call has failed: %s", err)
-		}
-	}()
-
-	return nil
-}
-
 func patch_russian_doom(patcher *Patcher) error {
 	you_got_it := patcher.ScanString("YOU GOT IT")
 	load_language_string := you_got_it.StoreRef()
@@ -180,42 +153,28 @@ const (
 	DBG_CONTINUE = 0x00010002
 )
 
-func inject(exePath string, args ...string) error {
+func inject(exePath string, rconPassword string, script string, args ...string) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+
+	e := env.NewEnv()
+	e.Define("log", func(format string, args ...interface{}) {
+		log.Printf(format, args...)
+	})
+	e.Define("chr", func(b byte) string {
+		return string([]byte{b})
+	})
+	_, err := vm.Execute(e, nil, script)
+	if err != nil {
+		return fmt.Errorf("cannot compile user script: %w", err)
+	}
 
 	dir, file := filepath.Split(exePath)
 	if dir != "" {
 		err := os.Chdir(dir)
 		if err != nil {
-			return err
+			return fmt.Errorf("chdir failed: %w", err)
 		}
-	}
-
-	kernel32 := windows.NewLazySystemDLL("kernel32.dll")
-	err := kernel32.Load()
-	if err != nil {
-		return err
-	}
-
-	log.Println("kernel32.dll has been loaded")
-
-	WaitForDebugEventEx := kernel32.NewProc("WaitForDebugEventEx")
-	DebugActiveProcessStop := kernel32.NewProc("DebugActiveProcessStop")
-	ContinueDebugEvent := kernel32.NewProc("ContinueDebugEvent")
-	ReadProcessMemory := kernel32.NewProc("ReadProcessMemory")
-
-	for _, proc := range []*windows.LazyProc{
-		WaitForDebugEventEx,
-		DebugActiveProcessStop,
-		ContinueDebugEvent,
-		ReadProcessMemory,
-	} {
-		err = proc.Find()
-		if err != nil {
-			return fmt.Errorf("cannot find %q: %w", proc.Name, err)
-		}
-		log.Printf("%s has been found in kernel32.", proc.Name)
 	}
 
 	var si windows.StartupInfo
@@ -234,7 +193,7 @@ func inject(exePath string, args ...string) error {
 		&pi,
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("CreateProcess has failed: %w", err)
 	}
 
 	log.Printf("New process with %d has been created.", pi.ProcessId)
@@ -246,27 +205,41 @@ func inject(exePath string, args ...string) error {
 		}
 	}()
 
-	patcher, err := NewPatcher(pi.Process, pi.Thread, file)
+	log.Println("Creating a patcher and running user script...")
+
+	patcher, err := NewPatcher(pi.Process, pi.Thread, file, rconPassword)
 	if err != nil {
+		return fmt.Errorf("cannot create a patcher: %s", err)
+	}
+	e.Define("patcher", patcher)
+	serr, err := vm.Execute(e, nil, "patch()")
+	if err != nil {
+		log.Printf("Cannot run patch script: %s", err)
 		return err
 	}
-
-	/*
-		err := patch_russian_doom(patcher)
-		if err != nil {
+	if serr != nil {
+		log.Printf("Error while executing patch script: %s", serr)
+		if err, ok := serr.(error); ok {
 			return err
+		} else {
+			return fmt.Errorf("%s", serr)
 		}
-	*/
-
-	err = patch_zdoom(patcher)
-	if err != nil {
-		return err
 	}
 
 	_, err = windows.ResumeThread(pi.Thread)
 	if err != nil {
 		return fmt.Errorf("cannot resume thread: %w", err)
 	}
+
+	go func(hProcess windows.Handle) {
+		_, err := windows.WaitForSingleObject(hProcess, windows.INFINITE)
+		if err != nil && err != ERROR_OKAY {
+			log.Printf("cannot wait for process to finish: %s", err)
+		}
+
+		patcher.RconServer.Stop()
+		patcher.RconServer = nil
+	}(pi.Process)
 
 	pi.Process = 0
 

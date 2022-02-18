@@ -442,8 +442,10 @@ func main() {
 
 	r.POST("/rundoom", func(c *gin.Context) {
 		var p struct {
-			Path string `form:"path"`
-			Args string `form:"args"`
+			Path         string `form:"path"`
+			Args         string `form:"args"`
+			RconPassword string `form:"rcon_password"`
+			PatchScript  string `form:"script"`
 		}
 
 		if err := c.ShouldBind(&p); err != nil {
@@ -473,19 +475,45 @@ func main() {
 			}
 		}
 
-		err := inject(p.Path, args...)
+		config.DoomExe = p.Path
+		config.DoomArgs = p.Args
+		config.RconPassword = p.RconPassword
+		config.PatchScript = p.PatchScript
+
+		err := inject(p.Path, p.RconPassword, p.PatchScript, args...)
 		if err != nil {
-			c.HTML(http.StatusOK, "error.html", gin.H{"Error": err.Error()})
+			h := gin.H{
+				"error":       "inject_error",
+				"description": err.Error(),
+			}
+
+			if perr, ok := err.(*parser.Error); ok {
+				h["line"] = perr.Pos.Line
+				h["column"] = perr.Pos.Column
+			}
+
+			log.Printf("inject error: %s", err)
+			c.AbortWithStatusJSON(http.StatusOK, h)
 			return
 		}
 
-		config.DoomExe = p.Path
-		config.DoomArgs = p.Args
 		if err := config.Save(); err != nil {
 			log.Printf("cannot save config: %s", err)
 		}
 
-		c.Redirect(http.StatusFound, "/?tab=doomexe")
+		if !rcon.IsOnline() {
+			err = rcon.Connect("127.0.0.1:10666", p.RconPassword)
+			if err != nil {
+				c.HTML(http.StatusOK, "error.html", gin.H{"Error": err.Error()})
+				return
+			}
+		}
+
+		if c.Query("xhr") == "" {
+			c.Redirect(http.StatusFound, "/?tab=doomexe")
+		} else {
+			c.JSON(http.StatusOK, gin.H{"ok": true})
+		}
 	})
 
 	r.POST("/rcon/config", func(c *gin.Context) {
