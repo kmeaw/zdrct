@@ -1,28 +1,45 @@
-      <div class="tab-pane fade{{ if eq .Tab "doomexe" }} show active{{ end }}" id="nav-doomexe" role="tabpanel" aria-labelledby="nav-doomexe-tab">
-	<form method="POST" action="/rundoom">
-	   <div class="container mt=5">
-	     <div class="row">
-	       <div class="col-sm-2">
-		 <label for="doomexe">Doom executable path:</label>
-	       </div>
-	       <div class="col-sm-10">
-                 <input id="doomexe" name="path" value="{{ .Config.DoomExe }}" class="saveme" data-name="doomexe" />
-	       </div>
-	     </div>
-	     <div class="row">
-	       <div class="col-sm-2">
-		 <label for="doomargs">Arguments:</label>
-	       </div>
-	       <div class="col-sm-10">
-                 <textarea name="args" class="saveme" data-name="doomargs">{{ .Config.DoomArgs }}</textarea>
-	       </div>
-	     </div>
-	     <div class="row">
-	       <div class="col-sm-12">
-		 <input type="submit" value="Run" />
-	       </div>
-	     </div>
-	   </div>
-	</form>
-      </div>
-
+    <div class="tab-pane fade{{ if eq .Tab "doomexe" }} show active{{ end }}" id="nav-doomexe" role="tabpanel" aria-labelledby="nav-doomexe-tab">
+      <form method="POST" action="/rundoom" id="rundoomform">
+        <div class="container mt=5">
+          <div class="row">
+            <div class="col-sm-2">
+              <label for="doomexe">Doom executable path:</label>
+            </div>
+            <div class="col-sm-10">
+              <input id="doomexe" name="path" value="{{ .Config.DoomExe }}" class="saveme" data-name="doomexe" />
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-sm-2">
+              <label for="doomargs">Arguments:</label>
+            </div>
+            <div class="col-sm-10">
+              <textarea rows="7" cols="80" name="args">{{ .Config.DoomArgs }}</textarea>
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-sm-2">
+              <label for="rconserverpassword">RCON password:</label>
+            </div>
+            <div class="col-sm-10">
+              <input type="text" name="rcon_password" value="{{ .Config.RconPassword }}" />
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-sm-12">
+              <textarea rows="15" cols="80" name="script" id="patchscript">{{ .Config.PatchScript }}</textarea>
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-sm-12">
+              <span id="patchscriptmsg"></span>
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-sm-12">
+              <input type="submit" value="Run" />
+            </div>
+          </div>
+        </div>
+      </form>
+    </div>

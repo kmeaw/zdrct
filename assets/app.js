@@ -4,8 +4,13 @@ window.addEventListener('DOMContentLoaded', (event) => {
 	const $script = document.getElementById('script');
 	const $scriptform = document.getElementById('scriptform');
 	const $scriptmsg = document.getElementById('scriptmsg');
-
 	const $submit = $scriptform.querySelector('input[type=submit]');
+
+	const $patchscript = document.getElementById('patchscript');
+	const $patchscriptmsg = document.getElementById('patchscriptmsg');
+	const $rundoomform = document.getElementById('rundoomform');
+	const $patchsubmit = $rundoomform.querySelector('input[type=submit]');
+
 	const $rewards_table = document.getElementById('rewards_table');
 
 	const $iwad = document.getElementById('wizard_iwad');
@@ -61,64 +66,84 @@ window.addEventListener('DOMContentLoaded', (event) => {
 	}));
 
 	$submit.disabled = true;
+	$patchsubmit.disabled = true;
 
 	const cm = CodeMirror.fromTextArea($script,
 	{
 		mode:        'go',
 		lineNumbers: false
 	});
+	$scriptform.cm = cm;
+	$scriptform.msg = $scriptmsg;
+	$scriptform.script_field = $script;
 
-	$scriptform.addEventListener('submit', (event) => {
-		event.preventDefault();
-		event.stopPropagation();
+	const patchcm = CodeMirror.fromTextArea($patchscript,
+	{
+		mode:        'go',
+		lineNumbers: false
+	});
+	$rundoomform.cm = patchcm;
+	$rundoomform.msg = $patchscriptmsg;
+	$rundoomform.script_field = $patchscript;
 
-		const req = fetch($scriptform.action + '?xhr=1', {
-			method: 'POST',
-			mode: 'same-origin',
-			cache: 'no-cache',
-			credentials: 'omit',
-			headers: {
-				'Content-Type': 'application/x-www-form-urlencoded',
-				'Accept': 'application/json'
-			},
-			redirect: 'error',
-			body: new URLSearchParams({
-				script: $script.value
-			}).toString()
-		});
+	[$scriptform, $rundoomform].forEach($form => {
+		(($form) => {
+			$form.addEventListener('submit', (event) => {
+				event.preventDefault();
+				event.stopPropagation();
 
-		req
-			.then((resp) => resp.json())
-			.then((json) => {
-				cm.getDoc().getAllMarks().forEach((mark) => mark.clear());
-				if (json.line && json.column) {
-					cm.focus();
-					cm.setCursor({
-						line: json.line - 1,
-						ch: json.column - 1
-					});
-					cm.getDoc().markText({
-						line: json.line - 1,
-						ch: json.column - 1,
-					}, {
-						line: json.line - 1,
-						ch: json.column
-					}, {
-						css: 'background-color: red'
-					});
+				const usp = new URLSearchParams();
+				const fd = new FormData($form);
+				for (const [key, value] of fd.entries()) {
+					usp.set(key, value);
 				}
 
-				if (json.error) {
-					$scriptmsg.innerText = json.description || json.error;
-				} else {
-					location.search = '?tab=script';
-				}
+				const req = fetch($form.action + '?xhr=1', {
+					method: 'POST',
+					mode: 'same-origin',
+					cache: 'no-cache',
+					credentials: 'omit',
+					headers: {
+						'Content-Type': 'application/x-www-form-urlencoded',
+						'Accept': 'application/json'
+					},
+					redirect: 'error',
+					body: usp.toString()
+				});
+
+				req
+					.then((resp) => resp.json())
+					.then((json) => {
+						$form.cm.getDoc().getAllMarks().forEach((mark) => mark.clear());
+						if (json.line && json.column) {
+							$form.cm.focus();
+							$form.cm.setCursor({
+								line: json.line - 1,
+								ch: json.column - 1
+							});
+							$form.cm.getDoc().markText({
+								line: json.line - 1,
+								ch: json.column - 1,
+							}, {
+								line: json.line - 1,
+								ch: json.column
+							}, {
+								css: 'background-color: red'
+							});
+						}
+
+						if (json.error) {
+							$form.msg.innerText = json.description || json.error;
+						}
+					});
+
+				return false;
 			});
-
-		return false;
+		}) ($form);
 	});
 
 	$submit.disabled = false;
+	$patchsubmit.disabled = false;
 
 	$iwad.addEventListener('change', (event) => {
 		if ($iwad.files.length !== 1) {
