@@ -49,7 +49,7 @@ type MemoryBasicInformation struct {
 }
 
 type Patcher struct {
-	exeName              string
+	ExeName              string
 	is64                 bool
 	module               windows.Handle
 	hProcess             windows.Handle
@@ -196,7 +196,7 @@ func NewPatcher(hProcess, hThread windows.Handle, exeName string, rconPassword s
 
 	return &Patcher{
 		is64:                 is64,
-		exeName:              exeName,
+		ExeName:              exeName,
 		hProcess:             hProcess,
 		hThread:              hThread,
 		VirtualAllocEx:       vax,
@@ -830,6 +830,10 @@ func (ps *PatchState) LoadDataRef() *PatchState {
 }
 
 func (ps *PatchState) Call(s string) (err error) {
+	if ps.Err != nil {
+		return ps.Err
+	}
+
 	buf := append([]byte(s), 0)
 
 	_, _, err = ps.Patcher.WriteProcessMemory.Call(
