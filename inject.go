@@ -28,7 +28,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -154,9 +153,6 @@ const (
 )
 
 func inject(exePath string, rconPassword string, script string, args ...string) error {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
 	e := env.NewEnv()
 	e.Define("log", func(format string, args ...interface{}) {
 		log.Printf(format, args...)
