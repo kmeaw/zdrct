@@ -22,8 +22,6 @@ Section "install"
 
 	File "zdrct.exe"
 	File "LICENSE.txt"
-	File "c\libinjector32.dll"
-	File "c\libinjector64.dll"
 
 	SetOutPath "$INSTDIR\templates"
 	File /x *.swp "templates\*.html"
@@ -38,8 +36,6 @@ SectionEnd
 Section "Uninstall"
 	RMDir /r "$INSTDIR\templates"
 	RMDir /r "$INSTDIR\assets"
-	Delete "$INSTDIR\libinjector32.dll"
-	Delete "$INSTDIR\libinjector64.dll"
 	Delete "$INSTDIR\zdrct.exe"
 	Delete "$INSTDIR\uninst.exe"
 	Delete "$SMPROGRAMS\ZDRCT.lnk"
