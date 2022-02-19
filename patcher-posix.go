@@ -79,7 +79,7 @@ func (p *Patcher) Exec(rax uintptr) (uintptr, error) {
 	defer func() {
 		err = syscall.PtraceSetRegs(p.pid, &regs)
 		if err != nil {
-			log.Printf("cannot write regs back: %w", err)
+			log.Printf("cannot write regs back: %s", err)
 		}
 	}()
 	new_regs := regs
@@ -101,9 +101,20 @@ func (p *Patcher) Exec(rax uintptr) (uintptr, error) {
 		return 0, err
 	}
 
-	_, err = syscall.Wait4(p.pid, nil, 0, nil)
-	if err != nil {
-		return 0, fmt.Errorf("cannot wait: %w", err)
+	var wstatus syscall.WaitStatus
+	for {
+		_, err = syscall.Wait4(p.pid, &wstatus, 0, nil)
+		if err != nil {
+			return 0, fmt.Errorf("cannot wait: %w", err)
+		}
+
+		if wstatus.Stopped() && wstatus.StopSignal() == syscall.SIGTRAP {
+			break
+		}
+
+		if wstatus.Exited() {
+			break
+		}
 	}
 
 	err = syscall.PtraceGetRegs(p.pid, &new_regs)
@@ -264,11 +275,11 @@ func NewPatcher(pid int, exeName string, rconPassword string) (*Patcher, error) 
 		return nil, fmt.Errorf("cannot allocate exec page: %w", err)
 	}
 
-	patcher.ExecScratch, err = patcher.Syscall(
+	patcher.Stack, err = patcher.Syscall(
 		syscall.SYS_MMAP,
 		0,          // addr
 		STACK_SIZE, // length
-		uintptr(syscall.PROT_READ|syscall.PROT_EXEC),                    // prot
+		uintptr(syscall.PROT_READ|syscall.PROT_WRITE),                   // prot
 		uintptr(syscall.MAP_ANON|syscall.MAP_PRIVATE|syscall.MAP_STACK), // flags
 		uintptr(0xffffffffffffffff),                                     // fd: -1
 		0,                                                               // offset
@@ -278,6 +289,8 @@ func NewPatcher(pid int, exeName string, rconPassword string) (*Patcher, error) 
 	}
 
 	log.Printf("ExecScratch %x", patcher.ExecScratch)
+	log.Printf("Scratch %x", patcher.Scratch)
+	log.Printf("Stack %x", patcher.Stack)
 
 	pid_, err := patcher.Syscall(syscall.SYS_GETPID)
 	if err != nil {
@@ -878,20 +891,15 @@ func (ps *PatchState) Call(s string) (err error) {
 		/* 38 */ 0x75, 0x22, // [2] jnz +34
 		/* 40 */ 0x48, 0xb9, 0, 0, 0, 0, 0, 0, 0, 0, // [10] mov rcx, imm64
 		/* 50 */ 0x48, 0xbf, 0, 0, 0, 0, 0, 0, 0, 0, // [10] mov rdi, imm64
-		// /* 60 */ 0xff, 0xd1, // [2] call rcx
-		/* 60 */ 0xeb, 0xfe, // [2] jmp $
+		/* 60 */ 0xff, 0xd1, // [2] call rcx
+		// /* 60 */ 0xeb, 0xfe, // [2] jmp $
+		// /* 60 */ 0x90, 0x90, // [2] nop
 		/* 62 */ 0x48, 0xc7, 0xc0, 0x3c, 0, 0, 0, // [7] mov rax, SYS_EXIT
 		/* 69 */ 0x48, 0x31, 0xff, // [3] xor rdi, rdi
 		/* 72 */ 0x0f, 0x05, // [2] syscall
-		/* 74 */ 0x48, 0x89, 0xc7, // [3] mov rdi, rax
-		/* 77 */ 0x48, 0xc7, 0xc0, 0x3d, 0, 0, 0, // [7] mov rax, SYS_wait4
-		/* 84 */ 0x48, 0x31, 0xf6, // [3] xor rsi, rsi
-		/* 87 */ 0x48, 0x31, 0xd2, // [3] xor rdx, rdx
-		/* 90 */ 0x4d, 0x31, 0xd2, // [3] xor r10, r10
-		/* 93 */ 0x0f, 0x05, // [2] syscall
-		/* 95 */ 0xcc, // [1] int3
+		/* 74 */ 0xcc, // [1] int3
 	}
-	binary.LittleEndian.PutUint32(buf[3:], uint32(syscall.CLONE_THREAD|syscall.CLONE_SIGHAND|syscall.CLONE_VM))
+	binary.LittleEndian.PutUint32(buf[3:], uint32(syscall.CLONE_THREAD|syscall.CLONE_SIGHAND|syscall.CLONE_VM|syscall.CLONE_VFORK))
 	binary.LittleEndian.PutUint64(buf[16:], uint64(ps.Patcher.Stack+STACK_SIZE))
 	binary.LittleEndian.PutUint64(buf[42:], uint64(ps.result))
 	binary.LittleEndian.PutUint64(buf[52:], uint64(ps.Patcher.Scratch))
