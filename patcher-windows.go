@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"log"
 	"runtime"
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -64,9 +65,16 @@ type Patcher struct {
 	CreateRemoteThread   *windows.LazyProc
 	SuspendThread        *windows.LazyProc
 	ResumeThread         *windows.LazyProc
+	GetExitCodeThread    *windows.LazyProc
+
+	ServerPipeHandle windows.Handle
+	ClientPipeHandle windows.Handle
 
 	Scratch     uintptr
 	ExecScratch uintptr
+	GpaExecPage uintptr
+	OpExecPage  uintptr
+	WfExecPage  uintptr
 
 	RconServer *RconServer
 }
@@ -160,6 +168,12 @@ func NewPatcher(hProcess, hThread windows.Handle, exeName string, rconPassword s
 		return nil, fmt.Errorf("could not find ResumeThread: %w", err)
 	}
 
+	gect := kernel32.NewProc("GetExitCodeThread")
+	err = crt.Find()
+	if err != nil {
+		return nil, fmt.Errorf("could not find GetExitCodeThread: %w", err)
+	}
+
 	scratch, _, err := vax.Call(
 		uintptr(hProcess),
 		0,
@@ -169,6 +183,8 @@ func NewPatcher(hProcess, hThread windows.Handle, exeName string, rconPassword s
 	)
 	if err != nil && err != ERROR_OKAY {
 		return nil, fmt.Errorf("could not allocate the scratch page: %w", err)
+	} else {
+		log.Printf("scratch page is %x", scratch)
 	}
 
 	xscratch, _, err := vax.Call(
@@ -192,9 +208,54 @@ func NewPatcher(hProcess, hThread windows.Handle, exeName string, rconPassword s
 		return nil, fmt.Errorf("cannot start rcon server: %w", err)
 	}
 
-	go rconServer.Start()
+	flags := uint32(windows.PIPE_ACCESS_INBOUND)
+	flags |= windows.FILE_FLAG_FIRST_PIPE_INSTANCE
 
-	return &Patcher{
+	pipeHandle, err := windows.CreateNamedPipe(
+		/* name= */ S(`\\.\pipe\zdrct-printf`),
+		/* flags= */ flags,
+		/* mode= */ windows.PIPE_TYPE_MESSAGE|
+			windows.PIPE_READMODE_MESSAGE,
+		/* maxinstances= */ 4,
+		4096,
+		4096,
+		1000,
+		nil,
+	)
+	if err != nil && err != ERROR_OKAY {
+		return nil, fmt.Errorf("cannot create named pipe: %w", err)
+	}
+
+	go func() {
+		err = windows.ConnectNamedPipe(pipeHandle, nil)
+		if err != nil && err != ERROR_OKAY {
+			log.Printf("cannot connect named pipe: %s", err)
+			return
+		}
+
+		log.Println("Client has been connected to the pipe.")
+
+		var done uint32
+		buf := make([]byte, 4096)
+		for {
+			err = windows.ReadFile(
+				pipeHandle,
+				buf,
+				&done,
+				nil,
+			)
+			if err != nil && err != ERROR_OKAY {
+				if err == windows.ERROR_BROKEN_PIPE {
+					return
+				}
+				log.Fatalf("read error: %s", err)
+			}
+
+			log.Printf("got msg: %q", buf[:done])
+		}
+	}()
+
+	patcher := &Patcher{
 		is64:                 is64,
 		ExeName:              exeName,
 		hProcess:             hProcess,
@@ -209,11 +270,76 @@ func NewPatcher(hProcess, hThread windows.Handle, exeName string, rconPassword s
 		CreateRemoteThread:   crt,
 		SuspendThread:        st,
 		ResumeThread:         rt,
+		GetExitCodeThread:    gect,
 
 		Scratch:     scratch,
 		ExecScratch: xscratch,
 		RconServer:  rconServer,
-	}, nil
+
+		ServerPipeHandle: pipeHandle,
+	}
+
+	gpa := []byte{
+		/*  0 */ 0x31, 0xC9, 0x64, 0x8B, 0x41, 0x30, // Find PEB
+		/*  6 */ 0x8B, 0x40, 0x0C, 0x8B, 0x70, 0x14,
+		/* 12 */ 0xAD, 0x96, 0xAD, 0x8B, 0x58, 0x10, 0x8B, 0x53, 0x3C, 0x01, 0xDA, 0x8B,
+		/* 24 */ 0x52, 0x78, 0x01, 0xDA, 0x8B, 0x72, 0x20, 0x01, 0xDE, 0x31, 0xC9,
+
+		// Find GetProcAddress
+		/* 35 */ 0x41,
+		/* 36 */ 0xAD, 0x01, 0xD8, 0x81, 0x38, 0x47, 0x65, 0x74, 0x50, 0x75, 0xF4, 0x81,
+		/* 48 */ 0x78, 0x04, 0x72, 0x6F, 0x63, 0x41, 0x75, 0xEB, 0x81, 0x78, 0x08, 0x64,
+		/* 60 */ 0x64, 0x72, 0x65, 0x75, 0xE2, 0x8B, 0x72, 0x24, 0x01, 0xDE, 0x66, 0x8B,
+		/* 72 */ 0x0C, 0x4E, 0x49, 0x8B, 0x72, 0x1C, 0x01, 0xDE, 0x8B, 0x14, 0x8E, 0x01,
+		/* 84 */ 0xDA, 0x31, 0xC9,
+
+		/* 87 */ 0x68, 0x00, 0x00, 0x00, 0x00, // PUSH Scratch
+		/* 92 */ 0x53, // PUSH kernel32
+		/* 93 */ 0xFF, 0xD2, // GetProcAddress(ebx, arg0)
+		/* 95 */ 0x89, 0x05, 0, 0, 0, 0, // mov [Scratch], eax
+		/*101 */ 0xC3, // ret
+	}
+	binary.LittleEndian.PutUint32(gpa[88:], uint32(scratch))
+	binary.LittleEndian.PutUint32(gpa[97:], uint32(scratch))
+	patcher.GpaExecPage, err = patcher.MakeExecPage(gpa)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create GetProcAddress gadget: %w", err)
+	}
+
+	remoteCreateFile, err := patcher.GetRemoteProcAddr("CreateFileW")
+	if err != nil {
+		return nil, err
+	}
+
+	op := []byte{
+		/*  0 */ 0x6A, 0, // templatefile=0
+		/*  2 */ 0x6A, 0, // flags=0
+		/*  4 */ 0x6A, 3, // createmode=OPEN_EXISTING
+		/*  6 */ 0x6A, 0, // sa=0
+		/*  8 */ 0x6A, 3, // mode=FILE_SHARE_READ|FILE_SHARE_WRITE
+		/* 10 */ 0x68, 0, 0, 0, 0x40, // access=GENERIC_WRITE
+		/* 15 */ 0x68, 0, 0, 0, 0, // name=Scratch
+		/* 20 */ 0xBA, 0, 0, 0, 0, // CreateFileW
+		/* 25 */ 0xFF, 0xD2, // CALL CreateFileW(...)
+		/* 27 */ 0x89, 0x05, 0, 0, 0, 0, // mov [Scratch], eax
+		/* 33 */ 0xC3, // ret
+	}
+	binary.LittleEndian.PutUint32(op[16:], uint32(scratch))
+	binary.LittleEndian.PutUint32(op[21:], uint32(remoteCreateFile))
+	binary.LittleEndian.PutUint32(op[29:], uint32(scratch))
+	patcher.OpExecPage, err = patcher.MakeExecPage(op)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create CreateFile gadget: %w", err)
+	}
+
+	patcher.ClientPipeHandle, err = patcher.CreateRemoteFileW(`\\.\pipe\zdrct-printf`)
+	if err != nil {
+		return nil, fmt.Errorf("cannot connect to the pipe: %w", err)
+	}
+
+	go rconServer.Start()
+
+	return patcher, nil
 }
 
 const MEM_FREE = 0x10000
@@ -829,6 +955,109 @@ func (ps *PatchState) LoadDataRef() *PatchState {
 	}
 }
 
+func (p *Patcher) CreateRemoteFileW(filename string) (windows.Handle, error) {
+	u, err := syscall.UTF16FromString(filename)
+	if err != nil {
+		return 0, fmt.Errorf("cannot convert to UTF-16: %q: %w", filename, err)
+	}
+
+	_, _, err = p.WriteProcessMemory.Call(
+		uintptr(p.hProcess),
+		p.Scratch,
+		uintptr(unsafe.Pointer(&u[0])),
+		uintptr(len(u)*2),
+		0,
+	)
+	if err != nil && err != ERROR_OKAY {
+		return 0, fmt.Errorf("cannot write to scratch page: %w", err)
+	}
+
+	var threadId uintptr
+	threadHandle, _, err := p.CreateRemoteThread.Call(
+		uintptr(p.hProcess),                // [in] HANDLE hProcess,
+		0,                                  // [in]  LPSECURITY_ATTRIBUTES  lpThreadAttributes,
+		0,                                  // [in]  SIZE_T                 dwStackSize,
+		p.OpExecPage,                       // [in] LPTHREAD_START_ROUTINE lpStartAddress,
+		p.Scratch,                          // [in] LPVOID lpParameter,
+		0,                                  // [in] DWORD dwCreationFlags,
+		uintptr(unsafe.Pointer(&threadId)), // [out] LPDWORD                lpThreadId
+	)
+	if err != nil && err != ERROR_OKAY {
+		return 0, fmt.Errorf("cannot create remote thread: %w", err)
+	}
+
+	defer windows.CloseHandle(windows.Handle(threadHandle))
+
+	_, err = windows.WaitForSingleObject(
+		windows.Handle(threadHandle),
+		windows.INFINITE,
+	)
+	if err != nil && err != ERROR_OKAY {
+		return 0, fmt.Errorf("cannot wait for thread to finish: %w", err)
+	}
+
+	remoteHandle, err := p.readU32(p.Scratch)
+	if err != nil && err != ERROR_OKAY {
+		return 0, fmt.Errorf("cannot read scratch word: %w", err)
+	}
+
+	if remoteHandle == 0xFFFFFFFF {
+		return 0, fmt.Errorf("cannot open file %q", filename)
+	}
+
+	return windows.Handle(remoteHandle), nil
+}
+
+func (p *Patcher) GetRemoteProcAddr(symbol string) (uintptr, error) {
+	buf := append([]byte(symbol), 0)
+
+	_, _, err := p.WriteProcessMemory.Call(
+		uintptr(p.hProcess),
+		p.Scratch,
+		uintptr(unsafe.Pointer(&buf[0])),
+		uintptr(len(buf)),
+		0,
+	)
+	if err != nil && err != ERROR_OKAY {
+		return 0, fmt.Errorf("cannot write to scratch page: %w", err)
+	}
+
+	var threadId uintptr
+	threadHandle, _, err := p.CreateRemoteThread.Call(
+		uintptr(p.hProcess),                // [in] HANDLE hProcess,
+		0,                                  // [in]  LPSECURITY_ATTRIBUTES  lpThreadAttributes,
+		0,                                  // [in]  SIZE_T                 dwStackSize,
+		p.GpaExecPage,                      // [in] LPTHREAD_START_ROUTINE lpStartAddress,
+		p.Scratch,                          // [in] LPVOID lpParameter,
+		0,                                  // [in] DWORD dwCreationFlags,
+		uintptr(unsafe.Pointer(&threadId)), // [out] LPDWORD                lpThreadId
+	)
+	if err != nil && err != ERROR_OKAY {
+		return 0, fmt.Errorf("cannot create remote thread: %w", err)
+	}
+
+	defer windows.CloseHandle(windows.Handle(threadHandle))
+
+	_, err = windows.WaitForSingleObject(
+		windows.Handle(threadHandle),
+		windows.INFINITE,
+	)
+	if err != nil && err != ERROR_OKAY {
+		return 0, fmt.Errorf("cannot wait for thread to finish: %w", err)
+	}
+
+	remote_addr, err := p.readU32(p.Scratch)
+	if err != nil && err != ERROR_OKAY {
+		return 0, fmt.Errorf("cannot read scratch word: %w", err)
+	}
+
+	if remote_addr == 0 {
+		return 0, fmt.Errorf("cannot find symbol %q in kernel32", symbol)
+	}
+
+	return uintptr(remote_addr), nil
+}
+
 func (ps *PatchState) Call(s string) (err error) {
 	if ps.Err != nil {
 		return ps.Err
@@ -1084,6 +1313,10 @@ func (p *Patcher) scan(perm_filter uint32, cb func(ptr uintptr, size int, arg in
 	}
 
 	return nil, ErrNotFound
+}
+
+func (p *Patcher) Shutdown() {
+	windows.CloseHandle(p.ServerPipeHandle)
 }
 
 var ErrNotFound = fmt.Errorf("not found")
