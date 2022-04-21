@@ -82,8 +82,12 @@ func PlaySound(filename string) error {
 	if name == "" {
 		name = base64.RawURLEncoding.EncodeToString([]byte(filename))
 		sounds[filename] = name
+		dir, _ := filepath.Split(filename)
+		if dir == "" {
+			filename = filepath.Join("assets", filename)
+		}
 		mciSendString.Call(
-			uintptr(unsafe.Pointer(S("open assets\\"+filename+" type mpegvideo alias "+name))),
+			uintptr(unsafe.Pointer(S("open "+filename+" type mpegvideo alias "+name))),
 			0,
 			0,
 			0,

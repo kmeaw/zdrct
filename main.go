@@ -75,6 +75,8 @@ func main() {
 		log.Fatalf("error loading config file: %s", err)
 	}
 
+	ircbot.TtsEndpoint = config.TtsEndpoint
+
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.LoggerWithConfig(gin.LoggerConfig{
@@ -262,7 +264,8 @@ func main() {
 
 	loadScript := func(c *gin.Context) error {
 		var p struct {
-			Script string `form:"script"`
+			Script      string `form:"script"`
+			TtsEndpoint string `form:"tts_endpoint"`
 		}
 
 		if err := c.ShouldBind(&p); err != nil {
@@ -273,6 +276,10 @@ func main() {
 		script := strings.TrimSpace(p.Script)
 		if script == "" {
 			script = config.Script
+		}
+
+		if p.TtsEndpoint == "" {
+			p.TtsEndpoint = config.TtsEndpoint
 		}
 
 		err = ircbot.LoadScript(script)
@@ -292,6 +299,8 @@ func main() {
 		}
 
 		config.Script = script
+		ircbot.TtsEndpoint = p.TtsEndpoint
+		config.TtsEndpoint = p.TtsEndpoint
 		if err := config.Save(); err != nil {
 			log.Printf("cannot save config: %s", err)
 		}

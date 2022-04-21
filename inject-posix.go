@@ -58,7 +58,10 @@ func inject(exePath string, rconPassword string, script string, args ...string) 
 	cmd.Dir, file = filepath.Split(real)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Start()
+	err = cmd.Start()
+	if err != nil {
+		return fmt.Errorf("cannot start %q: %w", exePath, err)
+	}
 	time.Sleep(time.Second * 2) // FIXME: wait process to initialize
 
 	pid := cmd.Process.Pid
@@ -119,8 +122,24 @@ func InitSound() error {
 	return nil
 }
 
-func PlaySound(_ string) {
-	// TODO: implement playsound for posix
+func PlaySound(name string) {
+	dir, _ := filepath.Split(name)
+	if dir == "" {
+		name = filepath.Join("assets", name)
+	}
+	cmd := exec.Command("mpv", "--vo=null", "--no-audio-display", name)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err := cmd.Start()
+	if err != nil {
+		log.Printf("error starting mpv: %s", err)
+	}
+	go func() {
+		err = cmd.Wait()
+		if err != nil {
+			log.Printf("error playing sound %q: %s", name, err)
+		}
+	}()
 }
 
 // vim: ai:ts=8:sw=8:noet:syntax=go

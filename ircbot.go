@@ -22,9 +22,13 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net"
+	"net/http"
+	"net/url"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -71,10 +75,13 @@ type IRCBot struct {
 
 	tw_broadcaster *TwitchClient
 	tw_bot         *TwitchClient
+	TtsEndpoint    string
 
-	client *irc.Client
-	conn   net.Conn
-	mu     *sync.Mutex
+	client  *irc.Client
+	hclient *http.Client
+
+	conn net.Conn
+	mu   *sync.Mutex
 }
 
 func NewIRCBot(tw_broadcaster, tw_bot *TwitchClient) *IRCBot {
@@ -85,7 +92,10 @@ func NewIRCBot(tw_broadcaster, tw_bot *TwitchClient) *IRCBot {
 
 		tw_broadcaster: tw_broadcaster,
 		tw_bot:         tw_bot,
-		mu:             new(sync.Mutex),
+
+		hclient: &http.Client{Timeout: 5 * time.Second},
+
+		mu: new(sync.Mutex),
 	}
 }
 
@@ -94,6 +104,9 @@ func (b *IRCBot) handleConn() {
 	client := b.client
 	b.mu.Unlock()
 
+	client.CapRequest("twitch.tv/tags", true)
+	client.CapRequest("twitch.tv/membership", true)
+	client.CapRequest("twitch.tv/commands", true)
 	err := client.Run()
 	if err != nil {
 		log.Printf("IRC error: %s", err)
@@ -134,14 +147,21 @@ func (b *IRCBot) ProcessMessage(ctx context.Context, from, msg string) error {
 
 	if strings.HasPrefix(flds[0], "!") {
 		cmd := flds[0][1:]
+		if strings.HasPrefix(flds[0], "!!") {
+			cmd = flds[0][2:]
+		}
 		_, err := b.e.Get("cmd_" + cmd)
 		if err != nil {
 			return fmt.Errorf("Unrecognized command: %q: %s", cmd, err)
 		}
 
 		args := make([]string, 0, len(flds)-1)
-		for _, arg := range flds[1:] {
-			args = append(args, fmt.Sprintf("%q", arg))
+		if strings.HasPrefix(flds[0], "!!") {
+			args = append(args, fmt.Sprintf("%q", strings.TrimSpace(msg[len(flds[0]):])))
+		} else {
+			for _, arg := range flds[1:] {
+				args = append(args, fmt.Sprintf("%q", arg))
+			}
 		}
 
 		script := fmt.Sprintf("cmd_%s(%s)", cmd, strings.Join(args, ", "))
@@ -177,6 +197,8 @@ func (b *IRCBot) ProcessMessage(ctx context.Context, from, msg string) error {
 }
 
 func (b *IRCBot) Handle(c *irc.Client, m *irc.Message) {
+	var err error
+
 	b.mu.Lock()
 	ch := b.ChannelName
 	b.mu.Unlock()
@@ -184,6 +206,14 @@ func (b *IRCBot) Handle(c *irc.Client, m *irc.Message) {
 	if m.Command == "001" {
 		// 001 is a welcome event, so we join channels there
 		c.Write("JOIN #" + ch)
+	} else if m.Command == "JOIN" && c.FromChannel(m) {
+		if strings.ToLower(m.Prefix.User) != strings.ToLower(c.CurrentNick()) {
+			err = b.ProcessMessage(context.Background(), m.Prefix.User, "!event_join")
+		}
+	} else if m.Command == "PART" && c.FromChannel(m) {
+		if strings.ToLower(m.Prefix.User) != strings.ToLower(c.CurrentNick()) {
+			err = b.ProcessMessage(context.Background(), m.Prefix.User, "!event_part")
+		}
 	} else if m.Command == "PRIVMSG" && c.FromChannel(m) {
 		msg := m.Trailing()
 		if m.Prefix == nil {
@@ -192,10 +222,13 @@ func (b *IRCBot) Handle(c *irc.Client, m *irc.Message) {
 		}
 
 		from := m.Prefix.User
-		err := b.ProcessMessage(context.Background(), from, msg)
-		if err != nil {
-			log.Println(err)
+		if msgid, _ := m.GetTag("msg-id"); msgid == "highlighted-message" {
+			msg = "!!event_highlighted " + msg
 		}
+		err = b.ProcessMessage(context.Background(), from, msg)
+	}
+	if err != nil {
+		log.Println(err)
 	}
 }
 
@@ -347,6 +380,82 @@ func is_reward() {
 		log.Printf("alert(%q)", alert.Text)
 		b.Alerter.Broadcast(alert)
 	}))
+	errors = append(errors, b.e.Define("tts", func(msg string) bool {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+
+		if b.TtsEndpoint == "" {
+			log.Println("TTS endpoint is not set.")
+			return false
+		}
+
+		u, err := url.Parse(b.TtsEndpoint)
+		if err != nil {
+			log.Printf("Invalid TTS endpoint: %s", err)
+			return false
+		}
+
+		ui := u.User
+		qs := u.Query()
+
+		u.User = nil
+		u.RawQuery = ""
+
+		for k, vv := range qs {
+			if len(vv) == 1 && vv[0] == "TEXT" {
+				qs[k] = []string{msg}
+			}
+		}
+
+		req, err := http.NewRequest("POST", u.String(), strings.NewReader(qs.Encode()))
+		if err != nil {
+			log.Printf("TTS cannot construct a request: %s", err)
+			return false
+		}
+
+		if ui != nil {
+			pass, ok := ui.Password()
+			if ok {
+				req.Header.Set("Authorization", ui.Username()+" "+pass)
+			}
+		}
+
+		req.Header.Set("User-Agent", "https://github.com/kmeaw/zdrct")
+
+		resp, err := b.hclient.Do(req)
+		if err != nil {
+			log.Printf("TTS request has failed: %s", err)
+			return false
+		}
+
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			log.Printf("TTS request has failed: unexpected status: %d (%q)", err, body)
+			return false
+		}
+
+		f, err := os.CreateTemp("", "zdrct-tts.*.mp3")
+		if err != nil {
+			log.Printf("Cannot create a temporary file: %s", err)
+			return false
+		}
+
+		_, err = io.Copy(f, resp.Body)
+		if err != nil {
+			log.Printf("Cannot write into the temporary file %q: %s", f.Name(), err)
+			return false
+		}
+
+		go func() {
+			PlaySound(f.Name())
+			time.Sleep(time.Second) // FIXME: ugly hack for windows
+			os.Remove(f.Name())
+		}()
+
+		return true
+	}))
 	errors = append(errors, b.e.Define("actor_reply", func(actor *Actor, from string) {
 		b.mu.Lock()
 		defer b.mu.Unlock()
@@ -449,6 +558,9 @@ func is_reward() {
 		}
 
 		return true
+	}))
+	errors = append(errors, b.e.Define("debug", func(format string, args ...interface{}) {
+		log.Printf("[DEBUG] "+format, args...)
 	}))
 	errors = append(errors, b.e.Define("rand", func() float64 {
 		return rand.Float64()

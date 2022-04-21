@@ -19,6 +19,7 @@ var Assets = map[string]string{}
 type Config struct {
 	BroadcasterToken string `json:"broadcaster_token,omitempty"`
 	BotToken         string `json:"bot_token,omitempty"`
+	TtsEndpoint      string `json:"tts_endpoint,omiteqmpty"`
 	Script           string `json:"-"`
 	DoomExe          string `json:"doom_exe"`
 	DoomArgs         string `json:"doom_args"`
@@ -31,6 +32,14 @@ type Config struct {
 
 func (c *Config) SetDefaultScript() {
 	c.Script = `
+cmd_event_join = func() {
+  debug("%q has joined the channel.", from())
+}
+
+cmd_event_part = func() {
+  debug("%q has left the channel.", from())
+}
+
 cmd_echo = func(flds...) {
   reply("echo for %q: %q", from(), join(flds, " "))
 }
@@ -201,6 +210,7 @@ func patch() {
 func (c *Config) SetDefaults() {
 	c.BroadcasterToken = ""
 	c.BotToken = ""
+	c.TtsEndpoint = ""
 
 	c.RconAddress = "127.0.0.1:10666"
 	c.RconPassword = ""
