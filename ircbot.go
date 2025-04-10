@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"reflect"
 	"strconv"
 	"strings"
@@ -652,6 +653,22 @@ func is_reward() {
 			return err
 		}
 	}
+	errors = append(errors, b.e.Define("system", func(arg0 string, args ...string) {
+		cmd := exec.Command(arg0, args...)
+		err := cmd.Start()
+		if err != nil {
+			log.Printf("cannot start %q: %s", arg0, err)
+			return
+		}
+		go func(cmd *exec.Cmd) {
+			if err := cmd.Wait(); err != nil {
+				log.Printf("error while waiting for %q to complete: %s", arg0, err)
+			}
+		}(cmd)
+	}))
+	errors = append(errors, b.e.Define("play", func(name string) {
+		PlaySound(name)
+	}))
 
 	_, err = vm.Execute(b.e, nil, script)
 	if err != nil {

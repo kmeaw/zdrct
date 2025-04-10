@@ -31,7 +31,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -45,15 +44,21 @@ type Remote struct {
 
 	ImageCache map[string]string
 
-	conn       *websocket.Conn
-	connPubSub *websocket.Conn
-	mu         sync.Mutex
+	conn             *websocket.Conn
+	connEventSub     *websocket.Conn
+	eventSubLocation *url.URL
+	mu               sync.Mutex
 }
 
 func NewRemote(bot *IRCBot) *Remote {
 	r := &Remote{
 		IRCBot:     bot,
 		ImageCache: make(map[string]string),
+		eventSubLocation: &url.URL{
+			Scheme: "wss",
+			Host:   "eventsub.wss.twitch.tv",
+			Path:   "/ws",
+		},
 	}
 
 	go r.connect()
@@ -115,6 +120,24 @@ type RemoteEvent struct {
 	IsReward bool   `json:"is_reward,omitempty"`
 }
 
+func (r *Remote) writeLoop() error {
+	r.mu.Lock()
+	conn := r.conn
+	r.mu.Unlock()
+
+	t := time.NewTicker(15 * time.Second)
+	defer t.Stop()
+
+	for range t.C {
+		_, err := conn.Write([]byte("{}"))
+		if err != nil {
+			log.Printf("write loop failed: %s", err)
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *Remote) readLoop() error {
 	r.mu.Lock()
 	conn := r.conn
@@ -151,32 +174,36 @@ func (r *Remote) readLoop() error {
 }
 
 func (r *Remote) watchRewards() {
-	t := time.NewTicker(time.Second * 15)
+	t := time.NewTicker(time.Second * 1)
 	defer t.Stop()
 	for {
-		err := r.checkRewards()
+		err := r.connectEventSub()
 		if err != nil {
 			if err != ErrNoConfig {
-				log.Printf("pubsub: connect failed: %s", err)
+				log.Printf("eventsub: connect failed: %s", err)
 			}
 			<-t.C
 			continue
 		}
 
-		err = r.readPubSub()
+		log.Printf("connected to eventsub")
+
+		err = r.readEventSub()
 		if err != nil {
-			log.Printf("pubsub read error: %s", err)
+			log.Printf("eventsub read error: %s", err)
 		}
 		r.mu.Lock()
-		r.connPubSub.Close()
-		r.connPubSub = nil
+		r.connEventSub.Close()
+		r.connEventSub = nil
 		r.mu.Unlock()
 
-		<-t.C
+		if err != nil {
+			<-t.C
+		}
 	}
 }
 
-func (r *Remote) checkRewards() error {
+func (r *Remote) connectEventSub() error {
 	var err error
 
 	r.mu.Lock()
@@ -185,11 +212,8 @@ func (r *Remote) checkRewards() error {
 	if r.Broadcaster == nil || r.Broadcaster.Token == "" || r.Broadcaster.Login == "" {
 		return ErrNoConfig
 	}
-	r.connPubSub, err = websocket.DialConfig(&websocket.Config{
-		Location: &url.URL{
-			Scheme: "wss",
-			Host:   "pubsub-edge.twitch.tv",
-		},
+	r.connEventSub, err = websocket.DialConfig(&websocket.Config{
+		Location: r.eventSubLocation,
 
 		Origin: &url.URL{
 			Scheme: "https",
@@ -207,106 +231,72 @@ func (r *Remote) checkRewards() error {
 		return err
 	}
 
-	enc := json.NewEncoder(r.connPubSub)
-	err = enc.Encode(map[string]interface{}{
-		"type": "LISTEN",
-		"data": map[string]interface{}{
-			"topics": []string{
-				fmt.Sprintf(
-					"channel-points-channel-v1.%d",
-					r.Broadcaster.BroadcasterID,
-				),
-			},
-			"auth_token": r.Broadcaster.Token,
-		},
-	})
-	if err != nil {
-		return err
-	}
-
-	go r.pubSubTicker()
 	return nil
 }
 
-func (r *Remote) pubSubTicker() {
+type EventSubMetadata struct {
+	MessageID        string    `json:"message_id"`
+	MessageType      string    `json:"message_type"`
+	MessageTimestamp time.Time `json:"message_timestamp"`
+	SubscriptionType string    `json:"subscription_type,omitempty"`
+}
+
+type EventSubBase struct {
+	Metadata EventSubMetadata `json:"metadata"`
+}
+
+type EventSubUnknown struct {
+	EventSubBase
+	Payload map[string]interface{} `json:"payload"`
+}
+
+type EventSubNotification struct {
+	EventSubBase
+	Payload struct {
+		Subscription struct {
+			ID        string                 `json:"id"`
+			Status    string                 `json:"status"`
+			Type      string                 `json:"type"`
+			Version   string                 `json:"version"`
+			Cost      int                    `json:"cost"`
+			Condition map[string]interface{} `json:"condition"`
+			Transport struct {
+				Method    string `json:"method"`
+				SessionID string `json:"session_id"`
+			} `json:"transport"`
+			CreatedAt time.Time `json:"created_at"`
+		} `json:"subscription"`
+		Event map[string]interface{} `json:"event"`
+	} `json:"payload"`
+}
+
+type EventSubReconnect struct {
+	EventSubBase
+	Session struct {
+		Id                      string    `json:"id"`
+		Status                  string    `json:"status"`
+		KeepaliveTimeoutSeconds int       `json:"keepalive_timeout_seconds"`
+		ReconnectURL            string    `json:"reconnect_url"`
+		ConnectedAt             time.Time `json:"connected_at"`
+	} `json:"session"`
+}
+
+type EventSubWelcome struct {
+	EventSubBase
+	Payload struct {
+		Session struct {
+			ID                      string    `json:"id"`
+			Status                  string    `json:"status"`
+			ConnectedAt             time.Time `json:"connected_at"`
+			KeepaliveTimeoutSeconds int       `json:"keepalive_timeout_seconds"`
+			ReconnectURL            string    `json:"reconnect_url"`
+		} `json:"session"`
+	} `json:"payload"`
+}
+
+func (r *Remote) readEventSub() error {
 	r.mu.Lock()
-	conn := r.connPubSub
-	r.mu.Unlock()
-
-	t := time.NewTicker(10 * time.Second)
-	defer t.Stop()
-	for range t.C {
-		enc := json.NewEncoder(conn)
-		err := enc.Encode(map[string]interface{}{
-			"type": "PING",
-		})
-		if err != nil {
-			conn.Close()
-			break
-		}
-	}
-}
-
-type PubSubEvent struct {
-	Type string `json:"type"`
-	Data struct {
-		Topic   string `json:"topic"`
-		Message string `json:"message"`
-	} `json:"data"`
-}
-
-type RedemptionMessage struct {
-	Type string `json:"type"`
-	Data struct {
-		Timestamp  time.Time `json:"timestamp"`
-		Redemption struct {
-			ID   string `json:"id"`
-			User struct {
-				ID          int64  `json:"id,string"`
-				Login       string `json:"login"`
-				DisplayName string `json:"display_name"`
-			} `json:"user"`
-			ChannelID  int64     `json:"channel_id,string"`
-			RedeemedAt time.Time `json:"redeemed_at"`
-			Reward     struct {
-				ID                  string        `json:"id"`
-				ChannelID           int64         `json:"channel_id,string"`
-				Title               string        `json:"title"`
-				Prompt              string        `json:"prompt,omitempty"`
-				Cost                int           `json:"cost"`
-				IsUserInputRequired bool          `json:"is_user_input_required"`
-				IsSubOnly           bool          `json:"is_sub_only"`
-				Image               *RewardImages `json:"image"`
-				DefaultImage        *RewardImages `json:"default_image"`
-				BackgroundColor     string        `json:"background_color"`
-				IsEnabled           bool          `json:"is_enabled"`
-				IsPaused            bool          `json:"is_paused"`
-				IsInStock           bool          `json:"is_in_stock"`
-				MaxPerStream        struct {
-					IsEnabled    bool `json:"is_enabled"`
-					MaxPerStream int  `json:"max_per_stream"`
-				} `json:"max_per_stream"`
-				ShouldRedemptionsSkipRequestQueue bool        `json:"should_redemptions_skip_request_queue"`
-				TemplateID                        interface{} `json:"template_id"`
-				MaxPerUserPerStreamSetting        struct {
-					IsEnabled           bool `json:"is_enabled"`
-					MaxPerUserPerStream int  `json:"max_per_user_per_stream"`
-				} `json:"max_per_user_per_stream"`
-				GlobalCooldownSetting struct {
-					IsEnabled      bool `json:"is_enabled"`
-					GlobalCooldown int  `json:"global_cooldown_seconds"`
-				} `json:"global_cooldown"`
-				CooldownExpiresAt *time.Time `json:"cooldown_expires_at"`
-			} `json:"reward"`
-			Status    string `json:"status"`
-			UserInput string `json:"user_input,omitempty"`
-		} `json:"redemption"`
-	} `json:"data"`
-}
-
-func (r *Remote) readPubSub() error {
-	r.mu.Lock()
-	conn := r.connPubSub
+	conn := r.connEventSub
 	bot := r.IRCBot
 	r.mu.Unlock()
 
@@ -315,98 +305,128 @@ func (r *Remote) readPubSub() error {
 	}
 
 	dec := json.NewDecoder(conn)
-	event := PubSubEvent{}
+	event := EventSubUnknown{}
+	timeout := 60
 	for {
-		conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(time.Duration(timeout) * time.Second))
 		err := dec.Decode(&event)
 		if err != nil {
 			return err
 		}
 
-		if event.Type == "PONG" {
-			continue
-		} else if event.Type == "RECONNECT" {
-			break
-		} else if event.Type == "MESSAGE" {
-			// ok
-		} else if event.Type == "RESPONSE" {
-		} else {
-			log.Printf("pubsub: got unexpected type: %q", event.Type)
-			continue
-		}
+		bmsg, _ := json.Marshal(event)
 
-		if !strings.HasPrefix(event.Data.Topic, "channel-points-channel-v1.") {
-			continue
-		}
-
-		var rmsg RedemptionMessage
-		err = json.Unmarshal([]byte(event.Data.Message), &rmsg)
-		if err != nil {
-			log.Printf("unmarshal failed: %s", err)
-			continue
-		}
-		redemption := rmsg.Data.Redemption
-
-		r.mu.Lock()
-		m := bot.GetRewardsMap()
-		r.mu.Unlock()
-
-		ctx, cancel := context.WithTimeout(
-			context.Background(),
-			time.Second*15,
-		)
-		defer cancel()
-
-		reward := &Reward{
-			RewardCore: RewardCore{
-				ID:                                redemption.Reward.ID,
-				Title:                             redemption.Reward.Title,
-				Prompt:                            redemption.Reward.Prompt,
-				Cost:                              redemption.Reward.Cost,
-				BackgroundColor:                   redemption.Reward.BackgroundColor,
-				IsEnabled:                         redemption.Reward.IsEnabled,
-				IsUserInputRequired:               redemption.Reward.IsUserInputRequired,
-				IsPaused:                          redemption.Reward.IsPaused,
-				ShouldRedemptionsSkipRequestQueue: redemption.Reward.ShouldRedemptionsSkipRequestQueue,
-			},
-
-			Image:        redemption.Reward.Image,
-			DefaultImage: redemption.Reward.DefaultImage,
-			IsInStock:    redemption.Reward.IsInStock,
-		}
-
-		r.mu.Lock()
-		reward.SetClient(r.Broadcaster)
-		r.mu.Unlock()
-
-		cmd, ok := m[redemption.Reward.ID]
-		if ok {
-			log.Printf(
-				"User %s redeems reward %q: %q",
-				redemption.User.Login,
-				redemption.Reward.Title,
-				cmd.Cmd,
-			)
-			err := bot.ProcessMessage(
-				context.WithValue(context.Background(), "is_reward", true),
-				redemption.User.Login,
-				"!"+cmd.Cmd,
-			)
+		switch event.Metadata.MessageType {
+		case "session_keepalive":
+			// just reset the deadline
+		case "session_welcome":
+			welcome_event := EventSubWelcome{}
+			err = json.Unmarshal(bmsg, &welcome_event)
 			if err != nil {
-				log.Println(err)
-			} else {
-				err = reward.SetRedemptionStatus(ctx, redemption.ID, "FULFILLED")
+				return err
 			}
-		} else {
-			log.Printf(
-				"User %s redeems reward %q: command is not mapped",
-				redemption.User.Login,
-				reward.ID,
+
+			if s := welcome_event.Payload.Session.ReconnectURL; s != "" {
+				r.mu.Lock()
+				r.eventSubLocation, err = url.Parse(s)
+				r.mu.Unlock()
+				if err != nil {
+					return fmt.Errorf("cannot parse reconnect_url: %q: %w", s, err)
+				}
+			}
+
+			if t := welcome_event.Payload.Session.KeepaliveTimeoutSeconds; 15 < t && t < 300 {
+				timeout = t
+			}
+			r.mu.Lock()
+			err = r.Broadcaster.Subscribe(context.Background(), welcome_event.Payload.Session.ID)
+			r.mu.Unlock()
+			if err != nil {
+				return err
+			}
+
+			log.Printf("session %s has been subscribed to rewards", welcome_event.Payload.Session.ID)
+
+		case "session_reconnect":
+			return nil
+
+		case "notification":
+			if event.Metadata.SubscriptionType != "channel.channel_points_custom_reward_redemption.add" {
+				log.Printf("eventsub: unexpected message: %s", bmsg)
+				continue
+			}
+
+			notification_event := EventSubNotification{}
+			err = json.Unmarshal(bmsg, &notification_event)
+			if err != nil {
+				return err
+			}
+
+			if bot == nil {
+				log.Printf("bot is inactive")
+				continue
+			}
+
+			r.mu.Lock()
+			m := bot.GetRewardsMap()
+			r.mu.Unlock()
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*15,
 			)
-			err = reward.SetRedemptionStatus(ctx, redemption.ID, "CANCELED")
-		}
-		if err != nil {
-			log.Printf("cannot change redemption status: %s", err)
+			defer cancel()
+
+			redemption := &Redemption{}
+			bpayload, _ := json.Marshal(notification_event.Payload.Event)
+			err = json.Unmarshal(bpayload, &redemption)
+			if err != nil {
+				return fmt.Errorf("eventsub: cannot extract redemption payload from %q: %w", bpayload, err)
+			}
+
+			reward := &Reward{
+				RewardCore: RewardCore{
+					ID:     redemption.RewardInfo.ID,
+					Title:  redemption.RewardInfo.Title,
+					Prompt: redemption.RewardInfo.Prompt,
+					Cost:   redemption.RewardInfo.Cost,
+				},
+			}
+
+			r.mu.Lock()
+			reward.SetClient(r.Broadcaster)
+			r.mu.Unlock()
+
+			cmd, ok := m[redemption.RewardInfo.ID]
+			if ok {
+				log.Printf(
+					"User %s has redeemed a reward %q: %q",
+					redemption.UserLogin,
+					redemption.RewardInfo.Title,
+					cmd.Cmd,
+				)
+				err := bot.ProcessMessage(
+					context.WithValue(context.Background(), "is_reward", true),
+					redemption.UserLogin,
+					"!"+cmd.Cmd,
+				)
+				if err != nil {
+					log.Println(err)
+				} else {
+					err = reward.SetRedemptionStatus(ctx, redemption.ID, "FULFILLED")
+				}
+			} else {
+				log.Printf(
+					"User %s redeems a reward %q: command is not mapped",
+					redemption.UserLogin,
+					reward.ID,
+				)
+
+				err = reward.SetRedemptionStatus(ctx, redemption.ID, "CANCELED")
+			}
+			if err != nil {
+				log.Printf("cannot change redemption status: %s", err)
+			}
 		}
 	}
 
@@ -426,6 +446,8 @@ func (r *Remote) connect() {
 			<-t.C
 			continue
 		}
+
+		go r.writeLoop()
 
 		err = r.readLoop()
 		if err != nil {

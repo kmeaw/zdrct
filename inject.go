@@ -116,30 +116,6 @@ func PlaySound(filename string) error {
 	return nil
 }
 
-func patch_russian_doom(patcher *Patcher) error {
-	you_got_it := patcher.ScanString("YOU GOT IT")
-	load_language_string := you_got_it.StoreRef()
-	cheat_func3 := load_language_string.LoadRef()
-	cheat_func3 = cheat_func3.FuncAlign()
-	p_GiveArtifact, err := cheat_func3.ArgRef(2, patcher.Nil()).Result()
-	if err != nil {
-		return err
-	}
-
-	a_secret_is_revealed := patcher.ScanString("A SECRET IS REVEALED")
-	load_language_string2 := a_secret_is_revealed.StoreRef()
-	sector9_handler := load_language_string2.LoadRef()
-	console_player, err := sector9_handler.MulAdd().Result()
-	if err != nil {
-		return err
-	}
-
-	log.Printf("console_player: %x", console_player)
-	log.Printf("P_GiveArtifact: %x", p_GiveArtifact)
-
-	return nil
-}
-
 const (
 	EXCEPTION_DEBUG_EVENT      = 1
 	CREATE_THREAD_DEBUG_EVENT  = 2

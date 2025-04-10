@@ -261,6 +261,22 @@ type twitchRedemptionsReply struct {
 	Data []*Redemption `json:"data"`
 }
 
+type twitchSubscriptionCondition struct {
+	BroadcasterUserId string `json:"broadcaster_user_id,omitempty"`
+}
+
+type twitchSubscriptionTransport struct {
+	Method    string `json:"method"`
+	SessionId string `json:"session_id"`
+}
+
+type twitchEventSubscription struct {
+	Condition twitchSubscriptionCondition `json:"condition"`
+	Transport twitchSubscriptionTransport `json:"transport"`
+	Type      string                      `json:"type"`
+	Version   string                      `json:"version"`
+}
+
 type RewardImages struct {
 	Url1x string `json:"url_1x"`
 	Url2x string `json:"url_2x"`
@@ -592,6 +608,30 @@ func (c *TwitchClient) GetRewards() []*Reward {
 	defer c.mu.Unlock()
 
 	return c.Rewards
+}
+
+func (c *TwitchClient) Subscribe(ctx context.Context, session_id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	s := twitchEventSubscription{
+		Condition: twitchSubscriptionCondition{
+			BroadcasterUserId: fmt.Sprintf("%d", c.BroadcasterID),
+		},
+		Transport: twitchSubscriptionTransport{
+			Method:    "websocket",
+			SessionId: session_id,
+		},
+		Type:    "channel.channel_points_custom_reward_redemption.add",
+		Version: "1",
+	}
+
+	return c.apiCall(
+		ctx,
+		"https://api.twitch.tv/helix/eventsub/subscriptions",
+		s,
+		nil,
+	)
 }
 
 // vim: ai:ts=8:sw=8:noet:syntax=go

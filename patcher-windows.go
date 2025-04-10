@@ -251,6 +251,7 @@ func NewPatcher(hProcess, hThread windows.Handle, exeName string, rconPassword s
 				log.Fatalf("read error: %s", err)
 			}
 
+			// TODO: process message
 			log.Printf("got msg: %q", buf[:done])
 		}
 	}()

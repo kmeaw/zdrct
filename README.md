@@ -123,6 +123,15 @@ Returns the internal balance of the specified user.
 ### set_balance(user, new_balance)
 Updates the internal balance of the specified user to the specified amount.
 
+### tts(str)
+Sends the specified string to the TTS service and plays it back.
+
+### system(prog, args...)
+Runs an external program.
+
+### play(filename)
+Plays back audio from the specified file.
+
 ## Data types
 
 ### int64
