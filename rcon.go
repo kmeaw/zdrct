@@ -6,7 +6,7 @@
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU Affero General Public License as published by the
  * Free Software Foundation, version 3 of the License.
- *
+ * 
  * This program is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Affero General Public License
@@ -18,11 +18,7 @@
 package main
 
 import (
-	"context"
 	"crypto/md5"
-	"crypto/rand"
-	"crypto/subtle"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -48,170 +44,6 @@ type RconClient struct {
 
 	cv *sync.Cond
 	mu *sync.Mutex
-}
-
-type RconServer struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-
-	Password string
-	error    error
-
-	commands chan string
-
-	c    *net.UDPConn
-	peer *net.UDPAddr
-	salt []byte
-	mu   *sync.Mutex
-}
-
-func NewRconServer(password string) (*RconServer, error) {
-	ch := make(chan string, 16)
-	udpAddr := &net.UDPAddr{
-		IP:   net.IP{127, 0, 0, 1},
-		Port: 10666,
-	}
-
-	r := &RconServer{
-		Password: password,
-		commands: ch,
-	}
-
-	r.ctx, r.cancel = context.WithCancel(context.Background())
-
-	var err error
-	r.c, err = net.ListenUDP("udp", udpAddr)
-	if err != nil {
-		return nil, err
-	}
-
-	r.mu = new(sync.Mutex)
-
-	return r, nil
-}
-
-func (r *RconServer) Commands() <-chan string {
-	return r.commands
-}
-
-func (r *RconServer) Send(s string) error {
-	r.mu.Lock()
-	peer := r.peer
-	c := r.c
-	r.mu.Unlock()
-
-	if peer == nil {
-		return nil
-	}
-
-	_, err := c.WriteToUDP(
-		append([]byte{0xff, byte(SVRC_MESSAGE)}, []byte(s)...),
-		peer,
-	)
-
-	return err
-}
-
-func (r *RconServer) Start() {
-	buf := make([]byte, 4096)
-	c := r.c
-	for {
-		n, addr, err := c.ReadFromUDP(buf)
-		if err != nil {
-			if err := r.ctx.Err(); err != nil {
-				return
-			}
-
-			log.Printf("UDP read error: %s", err)
-			time.Sleep(time.Second)
-			continue
-		}
-
-		data := HuffmanDecode(buf[0:n])
-		if len(data) == 0 {
-			continue
-		}
-
-		switch CLRC(data[0]) {
-		case CLRC_BEGINCONNECTION:
-			salt := make([]byte, 32)
-			_, err := rand.Read(salt)
-			if err != nil {
-				log.Fatalf("error: cannot get random bytes: %s", err)
-			}
-			resp := append([]byte{0xff, byte(SVRC_SALT)}, salt...)
-			_, err = c.WriteToUDP(resp, addr)
-			if err != nil {
-				log.Printf("write failed: %s", err)
-			} else {
-				r.mu.Lock()
-				r.salt = salt
-				r.mu.Unlock()
-			}
-
-		case CLRC_PASSWORD:
-			if len(data) != 33 {
-				log.Printf("bad CLRC_PASSWORD: %q", data)
-				continue
-			}
-
-			sum, err := hex.DecodeString(string(data[1:]))
-			if err != nil {
-				log.Printf("bad CLRC_PASSWORD: %q", data)
-				continue
-			}
-
-			h := md5.New()
-			r.mu.Lock()
-			h.Write([]byte(r.salt))
-			h.Write([]byte(r.Password))
-			r.mu.Unlock()
-			sum2 := h.Sum(nil)
-
-			if subtle.ConstantTimeCompare(sum, sum2) != 1 {
-				_, err = c.WriteToUDP([]byte{0xff, byte(SVRC_INVALIDPASSWORD)}, addr)
-			} else {
-				_, err = c.WriteToUDP([]byte{
-					0xff,
-					byte(SVRC_LOGGEDIN),
-					4, // protocol version
-					0, // empty hostname
-					0, // empty history
-				}, addr)
-
-				r.mu.Lock()
-				r.peer = addr
-				r.mu.Unlock()
-			}
-
-			if err != nil {
-				log.Printf("write failed: %s", err)
-				continue
-			}
-
-		case CLRC_DISCONNECT:
-			r.mu.Lock()
-			r.peer = nil
-			r.mu.Unlock()
-
-		case CLRC_COMMAND:
-			r.commands <- strings.TrimSpace(string(data[1:]))
-		}
-	}
-}
-
-func (r *RconServer) Stop() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if r.c == nil {
-		log.Println("rcon server is already stopped")
-	}
-
-	r.c.Close()
-	r.c = nil
-	close(r.commands)
-	r.cancel()
 }
 
 // https://wiki.zandronum.com/RCon_protocol
@@ -449,7 +281,7 @@ func (r *RconClient) Connect(hostport, password string) (err error) {
 			h := md5.New()
 			h.Write(pkt[1:33])
 			h.Write([]byte(password))
-			hsum := []byte(hex.EncodeToString(h.Sum(nil)))
+			hsum := []byte(fmt.Sprintf("%x", h.Sum(nil)))
 			err = r.Send(CLRC_PASSWORD, hsum)
 
 		case SVRC_OLDPROTOCOL:

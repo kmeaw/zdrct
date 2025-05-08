@@ -6,7 +6,7 @@
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU Affero General Public License as published by the
  * Free Software Foundation, version 3 of the License.
- *
+ * 
  * This program is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Affero General Public License
@@ -451,10 +451,8 @@ func main() {
 
 	r.POST("/rundoom", func(c *gin.Context) {
 		var p struct {
-			Path         string `form:"path"`
-			Args         string `form:"args"`
-			RconPassword string `form:"rcon_password"`
-			PatchScript  string `form:"script"`
+			Path string `form:"path"`
+			Args string `form:"args"`
 		}
 
 		if err := c.ShouldBind(&p); err != nil {
@@ -484,45 +482,19 @@ func main() {
 			}
 		}
 
-		config.DoomExe = p.Path
-		config.DoomArgs = p.Args
-		config.RconPassword = p.RconPassword
-		config.PatchScript = p.PatchScript
-
-		err := inject(p.Path, p.RconPassword, p.PatchScript, args...)
+		err := inject(p.Path, args...)
 		if err != nil {
-			h := gin.H{
-				"error":       "inject_error",
-				"description": err.Error(),
-			}
-
-			if perr, ok := err.(*parser.Error); ok {
-				h["line"] = perr.Pos.Line
-				h["column"] = perr.Pos.Column
-			}
-
-			log.Printf("inject error: %s", err)
-			c.AbortWithStatusJSON(http.StatusOK, h)
+			c.HTML(http.StatusOK, "error.html", gin.H{"Error": err.Error()})
 			return
 		}
 
+		config.DoomExe = p.Path
+		config.DoomArgs = p.Args
 		if err := config.Save(); err != nil {
 			log.Printf("cannot save config: %s", err)
 		}
 
-		if !rcon.IsOnline() {
-			err = rcon.Connect("127.0.0.1:10666", p.RconPassword)
-			if err != nil {
-				c.HTML(http.StatusOK, "error.html", gin.H{"Error": err.Error()})
-				return
-			}
-		}
-
-		if c.Query("xhr") == "" {
-			c.Redirect(http.StatusFound, "/?tab=doomexe")
-		} else {
-			c.JSON(http.StatusOK, gin.H{"ok": true})
-		}
+		c.Redirect(http.StatusFound, "/?tab=doomexe")
 	})
 
 	r.POST("/rcon/config", func(c *gin.Context) {
@@ -543,12 +515,6 @@ func main() {
 			c.HTML(http.StatusOK, "error.html", gin.H{"Error": err.Error()})
 			return
 		}
-
-		go func() {
-			for msg := range rcon.Messages() {
-				log.Printf("Got message: %q", msg)
-			}
-		}()
 
 		config.RconAddress = p.Addr
 		config.RconPassword = p.Password

@@ -25,7 +25,6 @@ type Config struct {
 	DoomArgs         string `json:"doom_args"`
 	RconAddress      string `json:"rcon_address,omitempty"`
 	RconPassword     string `json:"rcon_password,omitempty"`
-	PatchScript      string `json:"-"`
 
 	zdrctConfigDir string
 }
@@ -182,29 +181,6 @@ reward_random.Title = "Random"
 reward_random.IsEnabled = true
 map_reward(reward_random, button_random)
 `
-
-	c.PatchScript = `
-func patch() {
-	script_error = patcher.ScanString(chr(0x1C) + "GScript error, \"%s\" line %d:")
-	Printf, err = script_error.LoadDataRef().Result()
-	if err != nil {
-		return err
-	}
-
-	toggle_idmypos = patcher.ScanString("toggle idmypos")
-	C_DoCommand = toggle_idmypos.LoadDataRef()
-	err = C_DoCommand.Error()
-	if err != nil {
-		return err
-	}
-
-	log("Printf = %x", Printf)
-	log("C_DoCommand = %x", C_DoCommand)
-
-	patcher.ExecRconCommands(C_DoCommand)
-	return nil
-}
-`
 }
 
 func (c *Config) SetDefaults() {
@@ -236,7 +212,7 @@ func (c *Config) Init() error {
 }
 
 func (c *Config) Load() error {
-	for _, fn := range []func() error{c.LoadConfig, c.LoadScript, c.LoadPatchScript} {
+	for _, fn := range []func() error{c.LoadConfig, c.LoadScript} {
 		err := fn()
 		if err != nil {
 			return err
@@ -281,23 +257,8 @@ func (c *Config) LoadScript() error {
 	return nil
 }
 
-func (c *Config) LoadPatchScript() error {
-	b, err := os.ReadFile(filepath.Join(c.zdrctConfigDir, "patch.anko"))
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			c.SetDefaultScript()
-			return nil
-		}
-
-		return nil
-	}
-
-	c.PatchScript = string(b)
-	return nil
-}
-
 func (c Config) Save() error {
-	for _, fn := range []func() error{c.SaveConfig, c.SaveScript, c.SavePatchScript} {
+	for _, fn := range []func() error{c.SaveConfig, c.SaveScript} {
 		err := fn()
 		if err != nil {
 			return err
@@ -331,21 +292,6 @@ func (c Config) SaveScript() error {
 	defer f.Close()
 
 	_, err = f.Write([]byte(c.Script))
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (c Config) SavePatchScript() error {
-	f, err := os.OpenFile(filepath.Join(c.zdrctConfigDir, "patch.anko"), os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0666)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	_, err = f.Write([]byte(c.PatchScript))
 	if err != nil {
 		return err
 	}
