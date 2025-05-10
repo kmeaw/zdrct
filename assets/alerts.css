@@ -10,3 +10,7 @@
 	color: #fff;
 	font-size: 20px;
 }
+
+.fade {
+	display: none;
+}
