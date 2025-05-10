@@ -1,3 +1,6 @@
+//go:build !windows
+// +build !windows
+
 /**
  * Copyright 2022 kmeaw
  *
@@ -6,7 +9,7 @@
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU Affero General Public License as published by the
  * Free Software Foundation, version 3 of the License.
- * 
+ *
  * This program is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Affero General Public License
@@ -15,12 +18,11 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-//go:build !windows
-// +build !windows
 
 package main
 
 import (
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,9 +65,11 @@ func InitSound() error {
 }
 
 func PlaySound(name string) {
+	c := &Config{}
+	c.Init()
 	dir, _ := filepath.Split(name)
 	if dir == "" {
-		name = filepath.Join("assets", name)
+		name = c.Asset(name)
 	}
 	cmd := exec.Command("mpv", "--vo=null", "--no-audio-display", name)
 	cmd.Stdout = os.Stdout

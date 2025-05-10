@@ -1,3 +1,6 @@
+//go:build windows
+// +build windows
+
 /**
  * Copyright 2022 kmeaw
  *
@@ -6,7 +9,7 @@
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU Affero General Public License as published by the
  * Free Software Foundation, version 3 of the License.
- * 
+ *
  * This program is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Affero General Public License
@@ -15,13 +18,10 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-//go:build windows
-// +build windows
 
 package main
 
 import (
-	"bytes"
 	"encoding/base64"
 	"fmt"
 	"log"
@@ -84,7 +84,7 @@ func InitSound() error {
 		return err
 	}
 
-	mciGetErrorString = winmm.NewProc("mciGetErrorStringA")
+	mciGetErrorString = winmm.NewProc("mciGetErrorStringW")
 	err = mciGetErrorString.Find()
 	if err != nil {
 		return fmt.Errorf("cannot resolve mciGetErrorString: %w", err)
@@ -95,7 +95,23 @@ func InitSound() error {
 	return nil
 }
 
+func mciError(errCode uintptr) string {
+	errbuf := make([]uint16, 4096)
+	ret, _, _ := mciGetErrorString.Call(
+		errCode,
+		uintptr(unsafe.Pointer(&errbuf[0])),
+		uintptr(len(errbuf)),
+	)
+	if ret == 0 {
+		return fmt.Sprintf("unknown MCI error code: %d", errCode)
+	}
+	return syscall.UTF16ToString(errbuf)
+}
+
 func PlaySound(filename string) error {
+	c := &Config{}
+	c.Init()
+
 	// TODO: protect sounds
 	name := sounds[filename]
 	if name == "" {
@@ -103,33 +119,28 @@ func PlaySound(filename string) error {
 		sounds[filename] = name
 		dir, _ := filepath.Split(filename)
 		if dir == "" {
-			filename = filepath.Join("assets", filename)
+			filename = c.Asset(filename)
 		}
-		mciSendString.Call(
-			uintptr(unsafe.Pointer(S("open "+filename+" type mpegvideo alias "+name))),
+		ret, _, _ := mciSendString.Call(
+			uintptr(unsafe.Pointer(S("open \""+filename+"\" type mpegvideo alias "+name+" wait"))),
 			0,
 			0,
 			0,
 		)
+		if ret != 0 {
+			delete(sounds, filename)
+			log.Printf("load: mciSendString failed: %s", mciError(ret))
+		}
 	}
+	log.Printf("Playing back %q as sound %q", filename, name)
 	ret, _, _ := mciSendString.Call(
-		uintptr(unsafe.Pointer(S("play "+name))),
+		uintptr(unsafe.Pointer(S("play "+name+" from 0"))),
 		0,
 		0,
 		0,
 	)
 	if ret != 0 {
-		errbuf := make([]byte, 4096)
-		mciGetErrorString.Call(
-			uintptr(ret),
-			uintptr(unsafe.Pointer(&errbuf[0])),
-			uintptr(len(errbuf)),
-		)
-		idx := bytes.IndexByte(errbuf, 0)
-		if idx != -1 {
-			errbuf = errbuf[:idx]
-		}
-		return fmt.Errorf("mciSendString failed: %s", errbuf)
+		return fmt.Errorf("mciSendString failed: %s", mciError(ret))
 	}
 
 	return nil
@@ -148,6 +159,7 @@ func inject(exePath string, args ...string) error {
 			return err
 		}
 	}
+	defer os.Chdir(wd)
 
 	kernel32 := windows.NewLazySystemDLL("kernel32.dll")
 	err = kernel32.Load()

@@ -299,6 +299,20 @@ func (c Config) SaveScript() error {
 	return nil
 }
 
+func (c Config) Asset(filename string) string {
+	_, err := os.Stat(filepath.Join(c.zdrctConfigDir, "assets", filename))
+	if err == nil { // if NO error
+		return filepath.Join(c.zdrctConfigDir, "assets", filename)
+	}
+
+	_, err = os.Stat(filepath.Join("assets", filename))
+	if err == nil { // if NO error
+		return filepath.Join("assets", filename)
+	}
+
+	return filename
+}
+
 func (c Config) ReadDir(dirname string) ([]string, error) {
 	locals := make(map[string]bool)
 	entries, err := os.ReadDir(filepath.Join(c.zdrctConfigDir, dirname))
