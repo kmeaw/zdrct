@@ -24,6 +24,8 @@ Section "install"
 	File "LICENSE.txt"
 	File "c\libinjector32.dll"
 	File "c\libinjector64.dll"
+	File "ffmpeg.exe"
+	File "libwinpthread-1.dll"
 
 	SetOutPath "$INSTDIR\templates"
 	File /x *.swp "templates\*.html"

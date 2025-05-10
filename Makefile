@@ -8,7 +8,7 @@ dist.exe: zdrct.exe assets templates
 
 zdrct: $(wildcard *.go)
 	rm -f zdrct
-	CGO_ENABLED=0 go build
+	CGO_ENABLED=1 go build
 
 clean:
 	rm -f zdrct zdrct.exe dist.exe

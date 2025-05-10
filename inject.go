@@ -22,7 +22,6 @@
 package main
 
 import (
-	"encoding/base64"
 	"fmt"
 	"log"
 	"os"
@@ -65,85 +64,6 @@ var shellcode = []byte{
 	0x53, 0xFF, 0xD2, // GetProcAddress("LoadLibraryW")
 	0x83, 0xC4, 0x18, // restore stack
 	0xFF, 0xE0, // jmp LoadLibraryW(arg0)
-}
-
-var sounds map[string]string
-var mciSendString *windows.LazyProc
-var mciGetErrorString *windows.LazyProc
-
-func InitSound() error {
-	winmm := windows.NewLazySystemDLL("winmm.dll")
-	err := winmm.Load()
-	if err != nil {
-		return err
-	}
-
-	mciSendString = winmm.NewProc("mciSendStringW")
-	err = mciSendString.Find()
-	if err != nil {
-		return err
-	}
-
-	mciGetErrorString = winmm.NewProc("mciGetErrorStringW")
-	err = mciGetErrorString.Find()
-	if err != nil {
-		return fmt.Errorf("cannot resolve mciGetErrorString: %w", err)
-	}
-
-	sounds = make(map[string]string)
-
-	return nil
-}
-
-func mciError(errCode uintptr) string {
-	errbuf := make([]uint16, 4096)
-	ret, _, _ := mciGetErrorString.Call(
-		errCode,
-		uintptr(unsafe.Pointer(&errbuf[0])),
-		uintptr(len(errbuf)),
-	)
-	if ret == 0 {
-		return fmt.Sprintf("unknown MCI error code: %d", errCode)
-	}
-	return syscall.UTF16ToString(errbuf)
-}
-
-func PlaySound(filename string) error {
-	c := &Config{}
-	c.Init()
-
-	// TODO: protect sounds
-	name := sounds[filename]
-	if name == "" {
-		name = base64.RawURLEncoding.EncodeToString([]byte(filename))
-		sounds[filename] = name
-		dir, _ := filepath.Split(filename)
-		if dir == "" {
-			filename = c.Asset(filename)
-		}
-		ret, _, _ := mciSendString.Call(
-			uintptr(unsafe.Pointer(S("open \""+filename+"\" type mpegvideo alias "+name+" wait"))),
-			0,
-			0,
-			0,
-		)
-		if ret != 0 {
-			delete(sounds, filename)
-			log.Printf("load: mciSendString failed: %s", mciError(ret))
-		}
-	}
-	log.Printf("Playing back %q as sound %q", filename, name)
-	ret, _, _ := mciSendString.Call(
-		uintptr(unsafe.Pointer(S("play "+name+" from 0"))),
-		0,
-		0,
-		0,
-	)
-	if ret != 0 {
-		return fmt.Errorf("mciSendString failed: %s", mciError(ret))
-	}
-
-	return nil
 }
 
 func inject(exePath string, args ...string) error {

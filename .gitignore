@@ -6,3 +6,5 @@ zdrct.exe
 libinjector*.dll
 libinjector*.so
 dist.exe
+ffmpeg.exe
+libwinpthread-1.dll

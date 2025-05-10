@@ -22,7 +22,6 @@
 package main
 
 import (
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,32 +57,6 @@ func inject(exePath string, args ...string) error {
 	case err := <-ch:
 		return err
 	}
-}
-
-func InitSound() error {
-	return nil
-}
-
-func PlaySound(name string) {
-	c := &Config{}
-	c.Init()
-	dir, _ := filepath.Split(name)
-	if dir == "" {
-		name = c.Asset(name)
-	}
-	cmd := exec.Command("mpv", "--vo=null", "--no-audio-display", name)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	err := cmd.Start()
-	if err != nil {
-		log.Printf("error starting mpv: %s", err)
-	}
-	go func() {
-		err = cmd.Wait()
-		if err != nil {
-			log.Printf("error playing sound %q: %s", name, err)
-		}
-	}()
 }
 
 // vim: ai:ts=8:sw=8:noet:syntax=go

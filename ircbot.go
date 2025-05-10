@@ -68,6 +68,7 @@ type IRCBot struct {
 	Alerter     *Alerter
 	Buttons     []*Command
 	RewardMap   map[string]*Command
+	Sound       *Sound
 
 	crediter *time.Ticker
 	online   bool
@@ -450,7 +451,7 @@ func is_reward() {
 		}
 
 		go func() {
-			PlaySound(f.Name())
+			b.Sound.Play(f.Name())
 			time.Sleep(time.Second) // FIXME: ugly hack for windows
 			os.Remove(f.Name())
 		}()
@@ -667,7 +668,7 @@ func is_reward() {
 		}(cmd)
 	}))
 	errors = append(errors, b.e.Define("play", func(name string) {
-		PlaySound(name)
+		b.Sound.Play(name)
 	}))
 
 	_, err = vm.Execute(b.e, nil, script)

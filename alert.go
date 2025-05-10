@@ -26,6 +26,7 @@ type Alerter struct {
 	lastEvent *AlertEvent
 	mu        *sync.Mutex
 	cv        *sync.Cond
+	Sound     *Sound
 }
 
 type AlertEvent struct {
@@ -49,7 +50,7 @@ func (a *Alerter) Broadcast(event AlertEvent) {
 	a.cv.Broadcast()
 
 	if event.Sound != "" {
-		PlaySound(event.Sound)
+		a.Sound.Play(event.Sound)
 	}
 }
 

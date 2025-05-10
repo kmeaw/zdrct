@@ -133,10 +133,13 @@ func main() {
 	rcon.Addr, _ = net.ResolveUDPAddr("udp", config.RconAddress)
 	rcon.Password = config.RconPassword
 
-	err = InitSound()
+	s := NewSound()
+	err = s.Init()
 	if err != nil {
-		log.Fatalf("cannot start sound system: %s", err)
+		log.Printf("cannot start sound system: %s", err)
 	}
+	alerter.Sound = s
+	ircbot.Sound = s
 
 	r.GET("/oauth", func(c *gin.Context) {
 		c.HTML(http.StatusOK, "oauth.html", nil)

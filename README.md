@@ -181,3 +181,15 @@ Adds a button command.
 
 ### map_reward(reward, command)
 Adds a custom reward, which will call command upon the redemption.
+
+# Building ffmpeg.exe
+
+Install MSYS2, launch the UCRT64 environment. Download and unpack FFmpeg source code.
+
+```
+pacman -S mingw64-w64-ucrt-x86_64-nasm mingw64-w64-ucrt-x86_64-diffutils make
+./configure --disable-everything --enable-small --disable-autodetect --enable-protocol=file,pipe --enable-demuxer=wav,mp3,aac --enable-decoder=pcm_s16le,aac,mp3 --enable-encoder=pcm_s16le --enable-muxer=pcm_s16le --enable-parser=mp3,aac --disable-indevs --disable-outdevs --enable-ffmpeg --disable-avdevice --disable-swscale --disable-network --disable-ffprobe --disable-ffplay --enable-filter=aresample --disable-bsfs --host-ldflags=-static
+make
+```
+
+Copy ffmpeg.exe and /ucrt64/bin/libwinpthread-1.dll to the target directory.
