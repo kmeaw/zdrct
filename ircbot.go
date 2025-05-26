@@ -594,7 +594,7 @@ func is_reward() {
 			if flt > m {
 				m = flt
 			}
-			sum += m
+			sum += flt
 		}
 		if len(args)%2 == 1 {
 			last := args[len(args)-1]
@@ -603,10 +603,13 @@ func is_reward() {
 			sum += m
 		}
 		roll := rand.Float64()
+		log.Printf("Unnormalized ps: %f", ps)
 		log.Printf("Roll value is %f", roll)
 		for i, p := range ps {
 			value := offset + p/sum
-			if roll < value {
+			log.Printf("%f .. %f -> %q", offset, value, vs[i])
+			if offset <= roll && roll < value {
+				log.Printf("%f <= %f and %f < %f", offset, roll, roll, value)
 				return vs[i]
 			}
 			offset = value
