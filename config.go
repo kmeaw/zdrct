@@ -19,12 +19,16 @@ var Assets = map[string]string{}
 type Config struct {
 	BroadcasterToken string `json:"broadcaster_token,omitempty"`
 	BotToken         string `json:"bot_token,omitempty"`
-	TtsEndpoint      string `json:"tts_endpoint,omiteqmpty"`
 	Script           string `json:"-"`
 	DoomExe          string `json:"doom_exe"`
 	DoomArgs         string `json:"doom_args"`
 	RconAddress      string `json:"rcon_address,omitempty"`
 	RconPassword     string `json:"rcon_password,omitempty"`
+
+	TtsEndpoint            string `json:"tts_endpoint,omitempty"`
+	RconAutoStart          bool   `json:"rcon_auto_start"`
+	NoMappedRewardCommands bool   `json:"no_mapped_reward_commands"`
+	SoundVolume            int    `json:"sound_volume,omitempty"`
 
 	zdrctConfigDir string
 }
@@ -186,13 +190,17 @@ map_reward(reward_random, button_random)
 func (c *Config) SetDefaults() {
 	c.BroadcasterToken = ""
 	c.BotToken = ""
-	c.TtsEndpoint = ""
 
 	c.RconAddress = "127.0.0.1:10666"
 	c.RconPassword = ""
 
 	c.DoomExe = "path/to/zdoom.exe"
 	c.DoomArgs = "+sv_cheats 1\n-skill 5\n-warp 1 2\n"
+
+	c.TtsEndpoint = ""
+	c.RconAutoStart = false
+	c.NoMappedRewardCommands = false
+	c.SoundVolume = 100
 }
 
 func (c *Config) Init() error {
@@ -233,6 +241,7 @@ func (c *Config) LoadConfig() error {
 	}
 	defer f.Close()
 
+	c.SoundVolume = 100
 	dec := json.NewDecoder(f)
 	err = dec.Decode(c)
 	if err != nil {

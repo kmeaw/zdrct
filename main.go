@@ -75,8 +75,6 @@ func main() {
 		log.Fatalf("error loading config file: %s", err)
 	}
 
-	ircbot.TtsEndpoint = config.TtsEndpoint
-
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.LoggerWithConfig(gin.LoggerConfig{
@@ -114,7 +112,7 @@ func main() {
 		log.Printf("invalidating bot token: %s", err)
 	}
 	if bot.Token != "" && broadcaster.Token != "" && config.Script != "" {
-		err = ircbot.LoadScript(config.Script)
+		err = ircbot.LoadScript(*config)
 		if err != nil {
 			log.Printf("error loading script: %s", err)
 		} else {
@@ -126,6 +124,10 @@ func main() {
 			if err != nil {
 				log.Printf("cannot start bot: %s", err)
 			}
+
+			event := RemoteEvent{}
+			event.Config.Buttons = ircbot.GetButtons()
+			remote.SetConfig(event)
 		}
 	}
 	cancel()
@@ -267,8 +269,7 @@ func main() {
 
 	loadScript := func(c *gin.Context) error {
 		var p struct {
-			Script      string `form:"script"`
-			TtsEndpoint string `form:"tts_endpoint"`
+			Script string `form:"script"`
 		}
 
 		if err := c.ShouldBind(&p); err != nil {
@@ -281,11 +282,9 @@ func main() {
 			script = config.Script
 		}
 
-		if p.TtsEndpoint == "" {
-			p.TtsEndpoint = config.TtsEndpoint
-		}
-
-		err = ircbot.LoadScript(script)
+		newConfig := *config
+		newConfig.Script = script
+		err = ircbot.LoadScript(newConfig)
 		if err != nil {
 			h := gin.H{
 				"error":       "script_error",
@@ -302,8 +301,6 @@ func main() {
 		}
 
 		config.Script = script
-		ircbot.TtsEndpoint = p.TtsEndpoint
-		config.TtsEndpoint = p.TtsEndpoint
 		if err := config.Save(); err != nil {
 			log.Printf("cannot save config: %s", err)
 		}
@@ -552,6 +549,31 @@ func main() {
 		c.Redirect(http.StatusFound, "/?tab=rcon")
 	})
 
+	r.POST("/settings", func(c *gin.Context) {
+		var p struct {
+			TtsEndpoint            string `form:"tts_endpoint"`
+			RconAutoStart          bool   `form:"rcon_auto_start"`
+			NoMappedRewardCommands bool   `form:"no_mapped_reward_commands"`
+			SoundVolume            int    `form:"sound_volume"`
+		}
+
+		if err := c.ShouldBind(&p); err != nil {
+			c.AbortWithError(http.StatusBadRequest, err)
+			return
+		}
+
+		config.TtsEndpoint = p.TtsEndpoint
+		config.RconAutoStart = p.RconAutoStart
+		config.NoMappedRewardCommands = p.NoMappedRewardCommands
+		config.SoundVolume = p.SoundVolume
+
+		if err := config.Save(); err != nil {
+			log.Printf("cannot save config: %s", err)
+		}
+
+		c.Redirect(http.StatusFound, "/?tab=settings")
+	})
+
 	r.GET("/", func(c *gin.Context) {
 		tab := c.Query("tab")
 		if tab == "" {
@@ -591,6 +613,29 @@ func main() {
 
 		c.JSON(http.StatusOK, map[string]bool{"ok": true})
 	})
+
+	if config.RconAutoStart {
+		go func() {
+			time.Sleep(2 * time.Second)
+
+			t := time.NewTicker(time.Second)
+			defer t.Stop()
+			for range t.C {
+				if rcon.IsOnline() {
+					continue
+				}
+
+				log.Println("Auto-connecting to rcon server...")
+				err := rcon.Connect(config.RconAddress, config.RconPassword)
+				if err != nil {
+					log.Printf("Error: %s", err)
+				} else {
+					log.Println("Auto-connect succeeded.")
+					time.Sleep(time.Second * 5)
+				}
+			}
+		}()
+	}
 
 	l, err := net.Listen("tcp", "localhost:8666")
 	if err != nil {

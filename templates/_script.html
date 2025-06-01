@@ -5,9 +5,6 @@
 	{{ else }}
 	<form method="POST" action="/startbot" id="scriptform">
 	{{ end }}
-	  <input type="text" name="tts_endpoint" value="{{ .Config.TtsEndpoint }}" placeholder="https://Api-Key:AQXXXXXX@tts.api.cloud.yandex.net/speech/v1/tts:synthesize?lang=ru-RU&text=TEXT&voice=oksana&folderId=b98765&format=mp3" size="120" />
-	  <br />
-
 	  <textarea id="script" rows="20" cols="80" name="script">{{ .Config.Script }}</textarea>
 	  <br />
 	{{ if .IRCBot.IsOnline }}

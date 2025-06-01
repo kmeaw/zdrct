@@ -1,0 +1,19 @@
+      <div class="tab-pane fade{{ if eq .Tab "settings" }} show active{{ end }}" id="nav-settings" role="tabpanel" aria-labelledby="nav-settings-tab">
+	<form method="POST" action="/settings">
+	  <label>Text-to-speech endpoint: <input type="text" name="tts_endpoint" value="{{ .Config.TtsEndpoint }}" placeholder="https://Api-Key:AQXXXXXX@tts.api.cloud.yandex.net/speech/v1/tts:synthesize?lang=ru-RU&text=TEXT&voice=oksana&folderId=b98765&format=mp3" size="120" /></label>
+	  <br />
+	  <small>use <b>TEXT</b> as a text placeholder</small>
+	  <br />
+
+	  <label>Auto-start RCon client: <input type="checkbox" name="rcon_auto_start" value="1" {{ if .Config.RconAutoStart }}checked="checked"{{ end }} /></label>
+	  <br />
+
+	  <label>Disable chat commands for Twitch-mapped rewards: <input type="checkbox" name="no_mapped_reward_commands" value="1" {{ if .Config.NoMappedRewardCommands }}checked="checked"{{ end }} /></label>
+	  <br />
+
+	  <label>Sound volume: <input name="sound_volume" type="range" min="1" max="100" value="{{ .Config.SoundVolume }}" /></label>
+	  <br />
+
+	  <input type="submit" value="Save" />
+	</form>
+      </div>

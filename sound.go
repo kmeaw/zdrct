@@ -77,7 +77,7 @@ func (s *Sound) Init() error {
 	return nil
 }
 
-func (s Sound) decodeWithFFmpeg(filename string) ([]byte, error) {
+func (s *Sound) decodeWithFFmpeg(filename string) ([]byte, error) {
 	buf := new(bytes.Buffer)
 	cmd := exec.Command(
 		s.ffmpeg,
@@ -125,7 +125,7 @@ func (s *Sound) loadSound(filename string) (*oto.Player, error) {
 	return s.ctx.NewPlayer(bytes.NewReader(b)), nil
 }
 
-func (s *Sound) Play(filename string) (err error) {
+func (s *Sound) Play(filename string, volume int) (err error) {
 	if s.ctx == nil {
 		return fmt.Errorf("sound system is disabled")
 	}
@@ -158,9 +158,18 @@ func (s *Sound) Play(filename string) (err error) {
 	}
 	p.SetVolume(0)
 	p.Play()
-	for v := 0.0; v <= 1.0; v += 0.05 {
+	maxVol := 0.01 * float64(volume)
+	if maxVol > 1.0 {
+		maxVol = 1.0
+	} else if maxVol < 0.0 {
+		maxVol = 0.0
+	}
+	for v := 0.0; v <= maxVol; v += maxVol / 20 {
 		p.SetVolume(v)
 		time.Sleep(time.Millisecond * 10)
+		if maxVol == 0.0 {
+			break
+		}
 	}
 	err = p.Err()
 	if err != nil {

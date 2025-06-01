@@ -42,7 +42,7 @@ func NewAlerter() *Alerter {
 	return a
 }
 
-func (a *Alerter) Broadcast(event AlertEvent) {
+func (a *Alerter) Broadcast(event AlertEvent, volume int) {
 	a.mu.Lock()
 	a.lastEvent = &event
 	a.mu.Unlock()
@@ -50,7 +50,7 @@ func (a *Alerter) Broadcast(event AlertEvent) {
 	a.cv.Broadcast()
 
 	if event.Sound != "" {
-		a.Sound.Play(event.Sound)
+		a.Sound.Play(event.Sound, volume)
 	}
 }
 

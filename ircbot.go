@@ -58,17 +58,20 @@ type Command struct {
 }
 
 type IRCBot struct {
-	Balances    map[string]int
-	UserName    string
-	AdminName   string
-	ChannelName string
-	RconClient  *RconClient
-	Script      string
-	LastBuckets map[string]time.Time
-	Alerter     *Alerter
-	Buttons     []*Command
-	RewardMap   map[string]*Command
-	Sound       *Sound
+	Balances     map[string]int
+	UserName     string
+	AdminName    string
+	ChannelName  string
+	RconClient   *RconClient
+	Script       string
+	LastBuckets  map[string]time.Time
+	Alerter      *Alerter
+	Buttons      []*Command
+	RewardMap    map[string]*Command
+	RewardSet    map[string]bool
+	Sound        *Sound
+	SoundVolume  int
+	TwitchFilter bool
 
 	crediter *time.Ticker
 	online   bool
@@ -91,6 +94,7 @@ func NewIRCBot(tw_broadcaster, tw_bot *TwitchClient) *IRCBot {
 		Balances:    make(map[string]int),
 		LastBuckets: make(map[string]time.Time),
 		RewardMap:   make(map[string]*Command),
+		RewardSet:   make(map[string]bool),
 
 		tw_broadcaster: tw_broadcaster,
 		tw_bot:         tw_bot,
@@ -155,6 +159,15 @@ func (b *IRCBot) ProcessMessage(ctx context.Context, from, msg string) error {
 		_, err := b.e.Get("cmd_" + cmd)
 		if err != nil {
 			return fmt.Errorf("Unrecognized command: %q: %s", cmd, err)
+		}
+
+		if b.TwitchFilter {
+			if b.RewardSet[cmd] {
+				is_reward := ctx.Value("is_reward")
+				if is_reward != true {
+					return fmt.Errorf("%q can only be called from Twitch rewards", cmd)
+				}
+			}
 		}
 
 		args := make([]string, 0, len(flds)-1)
@@ -251,7 +264,7 @@ func (b *IRCBot) IsOnline() bool {
 	return b.online
 }
 
-func (b *IRCBot) LoadScript(script string) error {
+func (b *IRCBot) LoadScript(config Config) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -261,6 +274,9 @@ func (b *IRCBot) LoadScript(script string) error {
 
 	b.Buttons = nil
 	b.RewardMap = map[string]*Command{}
+	b.RewardSet = map[string]bool{}
+	b.SoundVolume = config.SoundVolume
+	b.TwitchFilter = config.NoMappedRewardCommands
 
 	b.e = env.NewEnv()
 	_, err := vm.Execute(b.e, nil, `
@@ -282,9 +298,9 @@ func is_reward() {
 	orig_from, err := b.e.Get("from")
 	errors = append(errors, err)
 	errors = append(errors, b.e.Set("is_reward", func(ctx context.Context) (reflect.Value, reflect.Value) {
-		from := ctx.Value("is_reward")
+		is_reward := ctx.Value("is_reward")
 		_, err := orig_is_reward.(func(context.Context) (reflect.Value, reflect.Value))(ctx)
-		return reflect.ValueOf(from), err
+		return reflect.ValueOf(is_reward), err
 	}))
 	errors = append(errors, b.e.Set("from", func(ctx context.Context) (reflect.Value, reflect.Value) {
 		from := ctx.Value("from_user")
@@ -344,6 +360,7 @@ func is_reward() {
 		}
 
 		b.RewardMap[reward.ID] = command
+		b.RewardSet[command.Cmd] = true
 	}))
 	errors = append(errors, b.e.Define("admin", b.AdminName))
 	errors = append(errors, b.e.Define("balance", func(name string) int {
@@ -380,7 +397,7 @@ func is_reward() {
 		}
 
 		log.Printf("alert(%q)", alert.Text)
-		b.Alerter.Broadcast(alert)
+		b.Alerter.Broadcast(alert, b.SoundVolume)
 	}))
 	errors = append(errors, b.e.Define("tts", func(msg string) bool {
 		b.mu.Lock()
@@ -451,7 +468,7 @@ func is_reward() {
 		}
 
 		go func() {
-			b.Sound.Play(f.Name())
+			b.Sound.Play(f.Name(), b.SoundVolume)
 			time.Sleep(time.Second) // FIXME: ugly hack for windows
 			os.Remove(f.Name())
 		}()
@@ -631,7 +648,7 @@ func is_reward() {
 		b.mu.Lock()
 		defer b.mu.Unlock()
 
-		b.Alerter.Broadcast(alert)
+		b.Alerter.Broadcast(alert, b.SoundVolume)
 	}))
 	errors = append(errors, b.e.Define("list_cmds", func() (result []string) {
 		for _, line := range strings.Split(b.e.String(), "\n") {
@@ -671,17 +688,18 @@ func is_reward() {
 		}(cmd)
 	}))
 	errors = append(errors, b.e.Define("play", func(name string) {
-		b.Sound.Play(name)
+		b.Sound.Play(name, b.SoundVolume)
 	}))
 
-	_, err = vm.Execute(b.e, nil, script)
+	_, err = vm.Execute(b.e, nil, config.Script)
 	if err != nil {
 		return err
 	}
 
 	loading = false
 
-	b.Script = script
+	b.Script = config.Script
+	b.TtsEndpoint = config.TtsEndpoint
 	return nil
 }
 

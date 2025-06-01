@@ -156,11 +156,11 @@ func (r *Remote) readLoop() error {
 			return err
 		}
 
-		log.Printf("ws: got event: %#v", event)
-
 		if event.Command == "" {
 			continue
 		}
+
+		log.Printf("ws: got event: %#v", event)
 
 		err = bot.ProcessMessage(
 			context.WithValue(context.Background(), "is_reward", event.IsReward),
@@ -429,8 +429,6 @@ func (r *Remote) readEventSub() error {
 			}
 		}
 	}
-
-	return nil
 }
 
 func (r *Remote) connect() {
