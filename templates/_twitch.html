@@ -1,6 +1,12 @@
 <div class="tab-pane fade{{ if eq .Tab "twitch" }} show active{{ end }}" id="nav-twitch" role="tabpanel" aria-labelledby="nav-twitch-tab">
   {{ if .Twitch.BroadcasterID }}
     Hello, Broadcaster {{ .Twitch.BroadcasterID }} ( {{ .Twitch.Login }} ).<br />
+    Token expires at {{ .Twitch.ExpiresAt }}
+    <form action="/disconnect" method="POST">
+      <input type="submit" value="reset" />
+      <input type="hidden" name="csrf" value="{{ .CSRF }}" />
+      <input type="hidden" name="purpose" value="broadcaster" />
+    </form>
   {{ else }}
     Twitch API is not connected.
     <form action="/connect" method="POST">
@@ -12,7 +18,13 @@
   {{ end }}
 
   {{ if .TwitchBot.BroadcasterID }}
-    Hello, Bot {{ .TwitchBot.BroadcasterID }} ( {{ .TwitchBot.Login }} ).
+    Hello, Bot {{ .TwitchBot.BroadcasterID }} ( {{ .TwitchBot.Login }} ). <br />
+    Token expires at {{ .Twitch.ExpiresAt }}
+    <form action="/disconnect" method="POST">
+      <input type="submit" value="reset" />
+      <input type="hidden" name="csrf" value="{{ .CSRF }}" />
+      <input type="hidden" name="purpose" value="bot" />
+    </form>
   {{ else }}
     Twitch API for the bot is not connected.
     <form action="/connect" method="POST">

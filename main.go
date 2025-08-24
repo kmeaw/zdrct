@@ -384,6 +384,50 @@ func main() {
 		c.Redirect(http.StatusFound, twitch_impl.GetAuthLink("http://localhost:8666/oauth", p.CSRF))
 	})
 
+	r.POST("/disconnect", func(c *gin.Context) {
+		var p struct {
+			CSRF    string `form:"csrf"`
+			Purpose string `form:"purpose"`
+		}
+
+		if err := c.ShouldBind(&p); err != nil {
+			c.AbortWithError(http.StatusBadRequest, err)
+			return
+		}
+
+		if p.CSRF != csrf {
+			c.AbortWithStatusJSON(http.StatusOK, gin.H{
+				"error": "bad_csrf",
+			})
+			return
+		}
+
+		var twitch_impl *TwitchClient
+		switch p.Purpose {
+		case "bot":
+			config.BotToken = ""
+			twitch_impl = bot
+		case "broadcaster":
+			config.BroadcasterToken = ""
+			twitch_impl = broadcaster
+		default:
+			c.AbortWithStatusJSON(http.StatusOK, gin.H{
+				"error": "no_purpose",
+			})
+			return
+		}
+
+		twitch_impl.BroadcasterID = 0
+		twitch_impl.Login = ""
+		twitch_impl.Token = ""
+
+		if err := config.Save(); err != nil {
+			log.Printf("cannot save config: %s", err)
+		}
+
+		c.Redirect(http.StatusFound, "/?tab=twitch")
+	})
+
 	r.GET("/alerts", func(c *gin.Context) {
 		c.HTML(http.StatusOK, "alerts.html", nil)
 	})
