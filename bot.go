@@ -615,7 +615,6 @@ func is_reward() {
 		table, err := ReadTable(b.confDir, name)
 		if err != nil {
 			panic(fmt.Errorf("error opening table %q: %w", name, err))
-			return nil
 		}
 		return table
 	}))

@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -76,11 +77,11 @@ func (z *ZDRCT) Init() error {
 	}
 
 	z.tw_broadcaster = NewTwitchClient(TwitchClientOpts{
-		Scopes:  DEFAULT_APP_SCOPES,
+		Scopes:  z.config.BroadcasterScopes,
 		Purpose: "broadcaster",
 	})
 	z.tw_bot = NewTwitchClient(TwitchClientOpts{
-		Scopes:  DEFAULT_APP_SCOPES,
+		Scopes:  DEFAULT_BOT_SCOPES,
 		Purpose: "bot",
 	})
 	z.yt_bot = NewYoutubeClient()
@@ -938,7 +939,9 @@ func (z *ZDRCT) initAPI() error {
 		}
 		tables, err := z.config.ReadDir("tables")
 		if err != nil {
-			log.Printf("cannot read tables dir: %s", err)
+			if !errors.Is(err, fs.ErrNotExist) {
+				log.Printf("cannot read tables dir: %s", err)
+			}
 		} else {
 			for i, table := range tables {
 				tables[i] = strings.TrimSuffix(

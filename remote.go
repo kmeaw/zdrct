@@ -31,6 +31,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -61,8 +62,18 @@ func NewRemote(bot *Bot) *Remote {
 		},
 	}
 
-	go r.connect()
-	go r.watchRewards()
+	found := false
+	for _, scope := range bot.tw_broadcaster.Scopes {
+		if strings.HasSuffix(scope, ":redemptions") {
+			go r.connect()
+			go r.watchRewards()
+			found = true
+			break
+		}
+	}
+	if !found {
+		log.Println("channel points are disabled, check your config")
+	}
 
 	return r
 }

@@ -3,12 +3,23 @@
 window.addEventListener('DOMContentLoaded', (event) => {
   const $message = document.getElementById('message');
 
-  const usp = new URLSearchParams(location.hash.substr(1));
+  let usp = new URLSearchParams(location.hash.substr(1));
+  if (usp.size == 0) {
+    usp = new URLSearchParams(location.search.substr(1));
+  }
+  const entries = Object.fromEntries(usp.entries());
   let target = '/oauth';
   let tab = 'twitch';
   if (usp.get('scope') == 'https://www.googleapis.com/auth/youtube') {
     target = '/oauth/youtube';
     tab = 'youtube';
+  }
+  if (entries.error) {
+    $message.innerText = entries.error;
+    if (entries.error_description) {
+      $message.innerText = entries.error + ': ' + entries.error_description;
+    }
+    return;
   }
   fetch(target, {
     method: 'POST',
@@ -19,7 +30,7 @@ window.addEventListener('DOMContentLoaded', (event) => {
       'Content-Type': 'application/json'
     },
     redirect: 'error',
-    body: JSON.stringify(Object.fromEntries(usp.entries()))
+    body: JSON.stringify(entries)
   })
     .then((r) => {
       if (!r.ok) {

@@ -17,6 +17,7 @@ import (
 var Assets = map[string]string{}
 
 type Config struct {
+	BroadcasterScopes   string `json:"broadcaster_scopes"`
 	BroadcasterToken    string `json:"broadcaster_token,omitempty"`
 	BotToken            string `json:"bot_token,omitempty"`
 	YoutubeToken        string `json:"youtube_token,omitempty"`
@@ -193,6 +194,7 @@ map_reward(reward_random, button_random)
 }
 
 func (c *Config) SetDefaults() {
+	c.BroadcasterScopes = DEFAULT_APP_SCOPES
 	c.BroadcasterToken = ""
 	c.BotToken = ""
 	c.YoutubeToken = ""
@@ -239,10 +241,10 @@ func (c *Config) Load() error {
 }
 
 func (c *Config) LoadConfig() error {
+	c.SetDefaults()
 	f, err := os.Open(filepath.Join(c.zdrctConfigDir, "config.json"))
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			c.SetDefaults()
 			return nil
 		}
 
@@ -250,7 +252,6 @@ func (c *Config) LoadConfig() error {
 	}
 	defer f.Close()
 
-	c.SoundVolume = 100
 	dec := json.NewDecoder(f)
 	err = dec.Decode(c)
 	if err != nil {
