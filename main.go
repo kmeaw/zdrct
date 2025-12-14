@@ -22,6 +22,8 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -38,116 +40,265 @@ import (
 	"golang.org/x/net/websocket"
 )
 
-func main() {
+type ZDRCT struct {
+	tw_broadcaster *TwitchClient
+	tw_bot         *TwitchClient
+	yt_bot         *YoutubeClient
+	rcon           *RconClient
+	bot            *Bot
+	remote         *Remote
+	alerter        *Alerter
+	config         *Config
+
+	engine *gin.Engine
+	csrf   string
+}
+
+func (z *ZDRCT) Init() error {
 	if len(os.Args) > 0 {
 		dir, _ := filepath.Split(os.Args[0])
 		if dir != "" {
 			err := os.Chdir(dir)
 			if err != nil {
-				log.Fatalf("cannot cd into %q: %s", dir, err)
+				return fmt.Errorf("cannot cd into %q: %w", dir, err)
 			}
 		}
 	}
 
-	broadcaster := NewTwitchClient(TwitchClientOpts{
+	z.config = &Config{}
+	err := z.config.Init()
+	if err != nil {
+		return fmt.Errorf("cannot init config system: %w", err)
+	}
+	err = z.config.Load()
+	if err != nil {
+		return fmt.Errorf("error loading config file: %w", err)
+	}
+
+	z.tw_broadcaster = NewTwitchClient(TwitchClientOpts{
 		Scopes:  DEFAULT_APP_SCOPES,
 		Purpose: "broadcaster",
 	})
-	bot := NewTwitchClient(TwitchClientOpts{
+	z.tw_bot = NewTwitchClient(TwitchClientOpts{
 		Scopes:  DEFAULT_APP_SCOPES,
 		Purpose: "bot",
 	})
-	bot.Scopes = strings.Split(DEFAULT_BOT_SCOPES, ",")
-	rcon := NewRconClient()
-	ircbot := NewIRCBot(broadcaster, bot)
-	ircbot.RconClient = rcon
-	remote := NewRemote(ircbot)
-	alerter := NewAlerter()
-	ircbot.Alerter = alerter
+	z.yt_bot = NewYoutubeClient()
+	z.tw_bot.Scopes = strings.Split(DEFAULT_BOT_SCOPES, ",")
+	z.rcon = NewRconClient()
+	z.bot = NewBot(z.tw_broadcaster, z.tw_bot, z.yt_bot, z.config.zdrctConfigDir)
+	z.bot.RconClient = z.rcon
+	z.remote = NewRemote(z.bot)
+	z.alerter = NewAlerter()
+	z.bot.Alerter = z.alerter
 
-	config := &Config{}
-	err := config.Init()
-	if err != nil {
-		log.Fatalf("cannot init config system: %s", err)
-	}
-	err = config.Load()
-	if err != nil {
-		log.Fatalf("error loading config file: %s", err)
+	if err := z.initWeb(); err != nil {
+		return err
 	}
 
-	gin.SetMode(gin.ReleaseMode)
-	r := gin.New()
-	r.Use(gin.LoggerWithConfig(gin.LoggerConfig{
-		SkipPaths: []string{"/check_csrf"},
-	}))
-	r.Use(gin.Recovery())
-	if err := config.InitAssetsTemplates(r); err != nil {
-		log.Fatalf("cannot init templates: %s", err)
+	if err := z.initTwitch(); err != nil {
+		return err
 	}
 
-	csrf_buf := make([]byte, 16)
-	_, err = rand.Read(csrf_buf)
-	if err != nil {
-		log.Fatalf("cannot read random bytes: %s", err)
+	if err := z.initYoutube(); err != nil {
+		return err
 	}
-	csrf := base64.RawURLEncoding.EncodeToString(csrf_buf)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	broadcaster.Token = config.BroadcasterToken
-	if err := broadcaster.Prepare(ctx); err != nil {
-		broadcaster.Token = ""
-		config.BroadcasterToken = ""
-		log.Printf("invalidating broadcaster token: %s", err)
-	} else {
-		err := broadcaster.LoadRewards(ctx)
-		if err != nil {
-			log.Printf("error loading rewards: %s", err)
-		}
-		remote.SetBroadcaster(broadcaster)
+	if err := z.initAPI(); err != nil {
+		return err
 	}
-	bot.Token = config.BotToken
-	if err := bot.Prepare(ctx); err != nil {
-		bot.Token = ""
-		config.BotToken = ""
-		log.Printf("invalidating bot token: %s", err)
-	}
-	if bot.Token != "" && broadcaster.Token != "" && config.Script != "" {
-		err = ircbot.LoadScript(*config)
-		if err != nil {
-			log.Printf("error loading script: %s", err)
-		} else {
-			ircbot.AdminName = broadcaster.Login
-			ircbot.UserName = bot.Login
-			ircbot.ChannelName = broadcaster.Login
 
-			err = ircbot.Start()
-			if err != nil {
-				log.Printf("cannot start bot: %s", err)
-			}
-
-			event := RemoteEvent{}
-			event.Config.Buttons = ircbot.GetButtons()
-			remote.SetConfig(event)
-		}
-	}
-	cancel()
-
-	rcon.Addr, _ = net.ResolveUDPAddr("udp", config.RconAddress)
-	rcon.Password = config.RconPassword
+	z.rcon.Addr, _ = net.ResolveUDPAddr("udp", z.config.RconAddress)
+	z.rcon.Password = z.config.RconPassword
 
 	s := NewSound()
 	err = s.Init()
 	if err != nil {
 		log.Printf("cannot start sound system: %s", err)
 	}
-	alerter.Sound = s
-	ircbot.Sound = s
+	z.alerter.Sound = s
+	z.bot.Sound = s
 
-	r.GET("/oauth", func(c *gin.Context) {
-		c.HTML(http.StatusOK, "oauth.html", nil)
+	return nil
+}
+
+func (z *ZDRCT) initWeb() error {
+	gin.SetMode(gin.ReleaseMode)
+	z.engine = gin.New()
+	z.engine.Use(gin.LoggerWithConfig(gin.LoggerConfig{
+		SkipPaths: []string{"/check_csrf"},
+	}))
+	z.engine.Use(gin.Recovery())
+	if err := z.config.InitAssetsTemplates(z.engine); err != nil {
+		return fmt.Errorf("cannot init templates: %w", err)
+	}
+
+	csrf_buf := make([]byte, 16)
+	_, err := rand.Read(csrf_buf)
+	if err != nil {
+		return fmt.Errorf("cannot read random bytes: %w", err)
+	}
+	z.csrf = base64.RawURLEncoding.EncodeToString(csrf_buf)
+
+	if z.config.StaticCSRF != "" {
+		z.csrf = z.config.StaticCSRF
+	}
+
+	return nil
+}
+
+func (z *ZDRCT) initTwitch() error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	z.tw_broadcaster.Token = z.config.BroadcasterToken
+	if err := z.tw_broadcaster.Prepare(ctx); err != nil {
+		z.tw_broadcaster.Token = ""
+		z.config.BroadcasterToken = ""
+		log.Printf("invalidating broadcaster token: %s", err)
+	} else {
+		err := z.tw_broadcaster.LoadRewards(ctx)
+		if err != nil {
+			log.Printf("error loading rewards: %s", err)
+		}
+		z.remote.SetBroadcaster(z.tw_broadcaster)
+	}
+	z.tw_bot.Token = z.config.BotToken
+	if err := z.tw_bot.Prepare(ctx); err != nil {
+		z.tw_bot.Token = ""
+		z.config.BotToken = ""
+		log.Printf("invalidating bot token: %s", err)
+	}
+	if z.tw_bot.Token != "" && z.tw_broadcaster.Token != "" && z.config.Script != "" {
+		err := z.bot.LoadScript(*z.config)
+		if err != nil {
+			log.Printf("error loading script: %s", err)
+		} else {
+			z.bot.AdminName = z.tw_broadcaster.Login
+			z.bot.UserName = z.tw_bot.Login
+			z.bot.ChannelName = z.tw_broadcaster.Login
+
+			err = z.bot.Start()
+			if err != nil {
+				log.Printf("cannot start bot: %s", err)
+			}
+
+			event := RemoteEvent{}
+			event.Config.Buttons = z.bot.GetButtons()
+			z.remote.SetConfig(event)
+		}
+	}
+
+	return nil
+}
+func (z *ZDRCT) initYoutube() error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	z.yt_bot.Token = z.config.YoutubeToken
+	z.yt_bot.RefreshToken = z.config.YoutubeRefreshToken
+	if z.yt_bot.Token != "" {
+		if err := z.yt_bot.Prepare(ctx); err != nil {
+			log.Printf("invalidating youtube token: %s", err)
+			z.yt_bot.Token = ""
+		}
+	}
+	if z.yt_bot.Token == "" && z.yt_bot.RefreshToken != "" {
+		z.yt_bot.Refresh()
+	}
+	if z.yt_bot.Token != "" {
+		z.config.YoutubeToken = z.yt_bot.Token
+		z.config.Save()
+	}
+
+	return nil
+}
+
+func (z *ZDRCT) loadScript(c *gin.Context) error {
+	var p struct {
+		CSRF   string `form:"csrf"`
+		Script string `form:"script"`
+	}
+
+	if err := c.ShouldBind(&p); err != nil {
+		c.AbortWithError(http.StatusBadRequest, err)
+		return err
+	}
+
+	if p.CSRF != z.csrf {
+		c.AbortWithStatusJSON(http.StatusOK, gin.H{
+			"error": "bad_csrf",
+		})
+		return errors.New("bad csrf")
+	}
+
+	script := strings.TrimSpace(p.Script)
+	if script == "" {
+		script = z.config.Script
+	}
+
+	newConfig := *z.config
+	newConfig.Script = script
+	err := z.bot.LoadScript(newConfig)
+	if err != nil {
+		h := gin.H{
+			"error":       "script_error",
+			"description": err.Error(),
+		}
+
+		if perr, ok := err.(*parser.Error); ok {
+			h["line"] = perr.Pos.Line
+			h["column"] = perr.Pos.Column
+		}
+
+		c.AbortWithStatusJSON(http.StatusOK, h)
+		return err
+	}
+
+	z.config.Script = script
+	if err := z.config.Save(); err != nil {
+		log.Printf("cannot save config: %s", err)
+	}
+
+	event := RemoteEvent{}
+	event.Config.Buttons = z.bot.GetButtons()
+	z.remote.SetConfig(event)
+
+	return nil
+}
+
+func (z *ZDRCT) initAPI() error {
+	z.engine.GET("/oauth", func(c *gin.Context) {
+		qs := c.Request.URL.Query()
+		code := qs.Get("code")
+		scope := qs.Get("scope")
+		if code == "" || scope == "" {
+			c.HTML(http.StatusOK, "oauth.html", nil)
+			return
+		}
+
+		if strings.HasPrefix(scope, "https://www.googleapis.com/auth/") {
+			err := z.yt_bot.AuthCode(c.Request.Context(), "http://localhost:8666/oauth", code)
+			if err != nil {
+				c.HTML(http.StatusOK, "error.html", gin.H{"Error": err.Error()})
+				return
+			}
+
+			if rt := z.yt_bot.RefreshToken; rt != "" {
+				z.config.YoutubeRefreshToken = rt
+				if err := z.config.Save(); err != nil {
+					log.Printf("cannot save config: %s", err)
+				}
+			}
+
+			c.Redirect(http.StatusFound, "/?tab=youtube")
+			return
+		}
+
+		c.Redirect(http.StatusFound, "/")
 	})
 
-	r.POST("/oauth", func(c *gin.Context) {
+	z.engine.POST("/oauth", func(c *gin.Context) {
 		var p struct {
 			State string `json:"state"`
 			Token string `json:"access_token"`
@@ -165,7 +316,7 @@ func main() {
 		}
 
 		user_csrf_token := u.Get("csrf_token")
-		if user_csrf_token != csrf {
+		if user_csrf_token != z.csrf {
 			c.AbortWithStatusJSON(http.StatusOK, gin.H{
 				"error": "bad_csrf",
 			})
@@ -176,9 +327,9 @@ func main() {
 		user_purpose := u.Get("purpose")
 		switch user_purpose {
 		case "bot":
-			twitch_impl = bot
+			twitch_impl = z.tw_bot
 		case "broadcaster":
-			twitch_impl = broadcaster
+			twitch_impl = z.tw_broadcaster
 		default:
 			c.AbortWithStatusJSON(http.StatusOK, gin.H{
 				"error": "no_purpose",
@@ -197,25 +348,70 @@ func main() {
 			return
 		}
 
-		config.BotToken = bot.Token
-		config.BroadcasterToken = broadcaster.Token
+		z.config.BotToken = z.tw_bot.Token
+		z.config.BroadcasterToken = z.tw_broadcaster.Token
 
-		if err := config.Save(); err != nil {
+		if err := z.config.Save(); err != nil {
 			log.Printf("cannot save config: %s", err)
 		}
 
 		if user_purpose == "broadcaster" {
-			if err := broadcaster.LoadRewards(c.Request.Context()); err != nil {
+			if err := z.tw_broadcaster.LoadRewards(c.Request.Context()); err != nil {
 				log.Printf("error loading rewards: %s", err)
 			}
-			remote.SetBroadcaster(broadcaster)
+			z.remote.SetBroadcaster(z.tw_broadcaster)
 		}
 
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 
-	r.POST("/rewards/:id/delete", func(c *gin.Context) {
-		err := broadcaster.DeleteReward(
+	z.engine.POST("/oauth/youtube", func(c *gin.Context) {
+		var p struct {
+			State string `json:"state"`
+			Token string `json:"access_token"`
+		}
+
+		if err := c.ShouldBind(&p); err != nil {
+			c.AbortWithError(http.StatusBadRequest, err)
+			return
+		}
+
+		u, err := url.ParseQuery(p.State)
+		if err != nil {
+			c.AbortWithError(http.StatusBadRequest, err)
+			return
+		}
+
+		user_csrf_token := u.Get("csrf_token")
+		if user_csrf_token != z.csrf {
+			c.AbortWithStatusJSON(http.StatusOK, gin.H{
+				"error": "bad_csrf",
+			})
+			return
+		}
+
+		z.yt_bot.Token = p.Token
+		err = z.yt_bot.Prepare(c.Request.Context())
+
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusOK, gin.H{
+				"error":       "youtube_error",
+				"description": err.Error(),
+			})
+			return
+		}
+
+		z.config.YoutubeToken = z.yt_bot.Token
+
+		if err := z.config.Save(); err != nil {
+			log.Printf("cannot save config: %s", err)
+		}
+
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	z.engine.POST("/rewards/:id/delete", func(c *gin.Context) {
+		err := z.tw_broadcaster.DeleteReward(
 			c.Request.Context(),
 			Reward{
 				RewardCore: RewardCore{
@@ -239,7 +435,7 @@ func main() {
 		}
 	})
 
-	r.POST("/rewards", func(c *gin.Context) {
+	z.engine.POST("/rewards", func(c *gin.Context) {
 		var reward Reward
 		if err := c.ShouldBind(&reward); err != nil {
 			c.AbortWithError(http.StatusBadRequest, err)
@@ -248,7 +444,7 @@ func main() {
 
 		log.Printf("CreateReward(%#v)", reward)
 
-		err := broadcaster.CreateReward(
+		err := z.tw_broadcaster.CreateReward(
 			c.Request.Context(),
 			&reward,
 		)
@@ -267,53 +463,8 @@ func main() {
 		}
 	})
 
-	loadScript := func(c *gin.Context) error {
-		var p struct {
-			Script string `form:"script"`
-		}
-
-		if err := c.ShouldBind(&p); err != nil {
-			c.AbortWithError(http.StatusBadRequest, err)
-			return err
-		}
-
-		script := strings.TrimSpace(p.Script)
-		if script == "" {
-			script = config.Script
-		}
-
-		newConfig := *config
-		newConfig.Script = script
-		err = ircbot.LoadScript(newConfig)
-		if err != nil {
-			h := gin.H{
-				"error":       "script_error",
-				"description": err.Error(),
-			}
-
-			if perr, ok := err.(*parser.Error); ok {
-				h["line"] = perr.Pos.Line
-				h["column"] = perr.Pos.Column
-			}
-
-			c.AbortWithStatusJSON(http.StatusOK, h)
-			return err
-		}
-
-		config.Script = script
-		if err := config.Save(); err != nil {
-			log.Printf("cannot save config: %s", err)
-		}
-
-		event := RemoteEvent{}
-		event.Config.Buttons = ircbot.GetButtons()
-		remote.SetConfig(event)
-
-		return nil
-	}
-
-	r.POST("/loadscript", func(c *gin.Context) {
-		err := loadScript(c)
+	z.engine.POST("/loadscript", func(c *gin.Context) {
+		err := z.loadScript(c)
 		if err != nil {
 			return
 		}
@@ -324,15 +475,45 @@ func main() {
 		}
 	})
 
-	r.GET("/check_csrf", func(c *gin.Context) {
-		if c.Query("csrf") != csrf {
+	z.engine.GET("/check_csrf", func(c *gin.Context) {
+		if c.Query("csrf") != z.csrf {
 			c.JSON(http.StatusOK, gin.H{"valid": false})
 		} else {
 			c.JSON(http.StatusOK, gin.H{"valid": true})
 		}
 	})
 
-	r.POST("/connect", func(c *gin.Context) {
+	z.engine.GET("/youtube/api/:method", func(c *gin.Context) {
+		if c.Query("csrf") != z.csrf {
+			c.JSON(http.StatusOK, gin.H{"valid": false})
+			return
+		}
+
+		kv := map[string]string{}
+		for k := range c.Request.URL.Query() {
+			if k == "csrf" {
+				continue
+			}
+			kv[k] = c.Request.URL.Query().Get(k)
+		}
+		result, err := z.yt_bot.GetAPI(
+			c.Request.Context(),
+			c.Param("method"),
+			kv,
+		)
+
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"ok":     true,
+			"result": result,
+		})
+	})
+
+	z.engine.POST("/connect", func(c *gin.Context) {
 		var p struct {
 			CSRF    string `form:"csrf"`
 			Token   string `form:"token"`
@@ -344,7 +525,7 @@ func main() {
 			return
 		}
 
-		if p.CSRF != csrf {
+		if p.CSRF != z.csrf {
 			c.AbortWithStatusJSON(http.StatusOK, gin.H{
 				"error": "bad_csrf",
 			})
@@ -354,9 +535,9 @@ func main() {
 		var twitch_impl *TwitchClient
 		switch p.Purpose {
 		case "bot":
-			twitch_impl = bot
+			twitch_impl = z.tw_bot
 		case "broadcaster":
-			twitch_impl = broadcaster
+			twitch_impl = z.tw_broadcaster
 		default:
 			c.AbortWithStatusJSON(http.StatusOK, gin.H{
 				"error": "no_purpose",
@@ -366,7 +547,7 @@ func main() {
 
 		if p.Token != "" {
 			twitch_impl.Token = p.Token
-			err = twitch_impl.Prepare(c.Request.Context())
+			err := twitch_impl.Prepare(c.Request.Context())
 			if err != nil {
 				twitch_impl.Token = ""
 			} else {
@@ -375,16 +556,101 @@ func main() {
 			}
 		}
 
-		config.BroadcasterToken = broadcaster.Token
-		config.BotToken = bot.Token
-		if err := config.Save(); err != nil {
+		z.config.BroadcasterToken = z.tw_broadcaster.Token
+		z.config.BotToken = z.tw_bot.Token
+		if err := z.config.Save(); err != nil {
 			log.Printf("cannot save config: %s", err)
 		}
 
 		c.Redirect(http.StatusFound, twitch_impl.GetAuthLink("http://localhost:8666/oauth", p.CSRF))
 	})
 
-	r.POST("/disconnect", func(c *gin.Context) {
+	z.engine.POST("/youtube/live", func(c *gin.Context) {
+		var p struct {
+			CSRF       string `form:"csrf"`
+			LiveChatID string `form:"live_chat_id"`
+		}
+
+		if err := c.ShouldBind(&p); err != nil {
+			c.AbortWithError(http.StatusBadRequest, err)
+			return
+		}
+
+		if p.CSRF != z.csrf {
+			c.AbortWithStatusJSON(http.StatusOK, gin.H{
+				"error": "bad_csrf",
+			})
+			return
+		}
+
+		z.yt_bot.LiveChatID = p.LiveChatID
+		c.Redirect(http.StatusFound, "/?tab=youtube")
+	})
+
+	z.engine.POST("/youtube/channel", func(c *gin.Context) {
+		var p struct {
+			CSRF      string `form:"csrf"`
+			ChannelID string `form:"channel_id"`
+		}
+
+		if err := c.ShouldBind(&p); err != nil {
+			c.AbortWithError(http.StatusBadRequest, err)
+			return
+		}
+
+		if p.CSRF != z.csrf {
+			c.AbortWithStatusJSON(http.StatusOK, gin.H{
+				"error": "bad_csrf",
+			})
+			return
+		}
+
+		z.config.YoutubeChannelID = p.ChannelID
+		if err := z.config.Save(); err != nil {
+			log.Printf("cannot save config: %s", err)
+		}
+
+		c.Redirect(http.StatusFound, "/?tab=youtube")
+	})
+
+	z.engine.POST("/connect/youtube", func(c *gin.Context) {
+		var p struct {
+			CSRF  string `form:"csrf"`
+			Token string `form:"token"`
+		}
+
+		if err := c.ShouldBind(&p); err != nil {
+			c.AbortWithError(http.StatusBadRequest, err)
+			return
+		}
+
+		if p.CSRF != z.csrf {
+			c.AbortWithStatusJSON(http.StatusOK, gin.H{
+				"error": "bad_csrf",
+			})
+			return
+		}
+
+		if p.Token != "" {
+			z.yt_bot.Token = p.Token
+			err := z.yt_bot.Prepare(c.Request.Context())
+			if err != nil {
+				z.yt_bot.Token = ""
+			} else {
+				c.Redirect(http.StatusFound, "/?tab=youtube")
+				return
+			}
+		}
+
+		z.config.YoutubeToken = z.yt_bot.Token
+		if err := z.config.Save(); err != nil {
+			log.Printf("cannot save config: %s", err)
+		}
+
+		c.Redirect(http.StatusFound, z.yt_bot.GetAuthLink("http://localhost:8666/oauth", p.CSRF))
+	})
+
+	z.engine.POST("/disconnect", func(c *gin.Context) {
 		var p struct {
 			CSRF    string `form:"csrf"`
 			Purpose string `form:"purpose"`
@@ -395,7 +661,7 @@ func main() {
 			return
 		}
 
-		if p.CSRF != csrf {
+		if p.CSRF != z.csrf {
 			c.AbortWithStatusJSON(http.StatusOK, gin.H{
 				"error": "bad_csrf",
 			})
@@ -405,11 +671,11 @@ func main() {
 		var twitch_impl *TwitchClient
 		switch p.Purpose {
 		case "bot":
-			config.BotToken = ""
-			twitch_impl = bot
+			z.config.BotToken = ""
+			twitch_impl = z.tw_bot
 		case "broadcaster":
-			config.BroadcasterToken = ""
-			twitch_impl = broadcaster
+			z.config.BroadcasterToken = ""
+			twitch_impl = z.tw_broadcaster
 		default:
 			c.AbortWithStatusJSON(http.StatusOK, gin.H{
 				"error": "no_purpose",
@@ -421,22 +687,50 @@ func main() {
 		twitch_impl.Login = ""
 		twitch_impl.Token = ""
 
-		if err := config.Save(); err != nil {
+		if err := z.config.Save(); err != nil {
 			log.Printf("cannot save config: %s", err)
 		}
 
 		c.Redirect(http.StatusFound, "/?tab=twitch")
 	})
 
-	r.GET("/alerts", func(c *gin.Context) {
+	z.engine.POST("/disconnect/youtube", func(c *gin.Context) {
+		var p struct {
+			CSRF string `form:"csrf"`
+		}
+
+		if err := c.ShouldBind(&p); err != nil {
+			c.AbortWithError(http.StatusBadRequest, err)
+			return
+		}
+
+		if p.CSRF != z.csrf {
+			c.AbortWithStatusJSON(http.StatusOK, gin.H{
+				"error": "bad_csrf",
+			})
+			return
+		}
+
+		z.config.YoutubeToken = ""
+		z.yt_bot.Login = ""
+		z.yt_bot.Token = ""
+
+		if err := z.config.Save(); err != nil {
+			log.Printf("cannot save config: %s", err)
+		}
+
+		c.Redirect(http.StatusFound, "/?tab=youtube")
+	})
+
+	z.engine.GET("/alerts", func(c *gin.Context) {
 		c.HTML(http.StatusOK, "alerts.html", nil)
 	})
 
-	r.GET("/alerts/ws", func(c *gin.Context) {
+	z.engine.GET("/alerts/ws", func(c *gin.Context) {
 		handler := websocket.Handler(func(ws *websocket.Conn) {
 			defer ws.Close()
 			enc := json.NewEncoder(ws)
-			ch := alerter.Subscribe()
+			ch := z.alerter.Subscribe()
 			for {
 				select {
 				case <-c.Request.Context().Done():
@@ -453,34 +747,16 @@ func main() {
 		handler.ServeHTTP(c.Writer, c.Request)
 	})
 
-	r.POST("/startbot", func(c *gin.Context) {
-		err := loadScript(c)
+	z.engine.POST("/startbot", func(c *gin.Context) {
+		err := z.loadScript(c)
 		if err != nil {
 			return
 		}
 
-		if bot.BroadcasterID == 0 {
-			c.AbortWithStatusJSON(http.StatusOK, gin.H{
-				"error": "no_bot_token",
-			})
-			return
-		}
-
-		if broadcaster.BroadcasterID == 0 {
-			c.AbortWithStatusJSON(http.StatusOK, gin.H{
-				"error": "no_broadcaster_token",
-			})
-			return
-		}
-
-		ircbot.AdminName = broadcaster.Login
-		ircbot.UserName = bot.Login
-		ircbot.ChannelName = broadcaster.Login
-
-		err = ircbot.Start()
+		err = z.bot.Start()
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusOK, gin.H{
-				"error":       "irc_error",
+				"error":       "bot_error",
 				"description": err.Error(),
 			})
 			return
@@ -493,14 +769,22 @@ func main() {
 		}
 	})
 
-	r.POST("/rundoom", func(c *gin.Context) {
+	z.engine.POST("/rundoom", func(c *gin.Context) {
 		var p struct {
 			Path string `form:"path"`
 			Args string `form:"args"`
+			CSRF string `form:"csrf"`
 		}
 
 		if err := c.ShouldBind(&p); err != nil {
 			c.AbortWithError(http.StatusBadRequest, err)
+			return
+		}
+
+		if p.CSRF != z.csrf {
+			c.AbortWithStatusJSON(http.StatusOK, gin.H{
+				"error": "bad_csrf",
+			})
 			return
 		}
 
@@ -532,19 +816,20 @@ func main() {
 			return
 		}
 
-		config.DoomExe = p.Path
-		config.DoomArgs = p.Args
-		if err := config.Save(); err != nil {
+		z.config.DoomExe = p.Path
+		z.config.DoomArgs = p.Args
+		if err := z.config.Save(); err != nil {
 			log.Printf("cannot save config: %s", err)
 		}
 
 		c.Redirect(http.StatusFound, "/?tab=doomexe")
 	})
 
-	r.POST("/rcon/config", func(c *gin.Context) {
+	z.engine.POST("/rcon/config", func(c *gin.Context) {
 		var p struct {
 			Addr     string `form:"addr"`
 			Password string `form:"password"`
+			CSRF     string `form:"csrf"`
 		}
 
 		if err := c.ShouldBind(&p); err != nil {
@@ -552,26 +837,34 @@ func main() {
 			return
 		}
 
-		rcon.Close()
+		if p.CSRF != z.csrf {
+			c.AbortWithStatusJSON(http.StatusOK, gin.H{
+				"error": "bad_csrf",
+			})
+			return
+		}
 
-		err = rcon.Connect(p.Addr, p.Password)
+		z.rcon.Close()
+
+		err := z.rcon.Connect(p.Addr, p.Password)
 		if err != nil {
 			c.HTML(http.StatusOK, "error.html", gin.H{"Error": err.Error()})
 			return
 		}
 
-		config.RconAddress = p.Addr
-		config.RconPassword = p.Password
-		if err := config.Save(); err != nil {
+		z.config.RconAddress = p.Addr
+		z.config.RconPassword = p.Password
+		if err := z.config.Save(); err != nil {
 			log.Printf("cannot save config: %s", err)
 		}
 
 		c.Redirect(http.StatusFound, "/?tab=rcon")
 	})
 
-	r.POST("/rcon", func(c *gin.Context) {
+	z.engine.POST("/rcon", func(c *gin.Context) {
 		var p struct {
 			Command string `form:"command"`
+			CSRF    string `form:"csrf"`
 		}
 
 		if err := c.ShouldBind(&p); err != nil {
@@ -579,12 +872,19 @@ func main() {
 			return
 		}
 
-		if !rcon.IsOnline() {
+		if p.CSRF != z.csrf {
+			c.AbortWithStatusJSON(http.StatusOK, gin.H{
+				"error": "bad_csrf",
+			})
+			return
+		}
+
+		if !z.rcon.IsOnline() {
 			c.HTML(http.StatusOK, "error.html", gin.H{"Error": "not connected"})
 			return
 		}
 
-		err = rcon.Command(p.Command)
+		err := z.rcon.Command(p.Command)
 		if err != nil {
 			c.HTML(http.StatusOK, "error.html", gin.H{"Error": err.Error()})
 			return
@@ -593,12 +893,16 @@ func main() {
 		c.Redirect(http.StatusFound, "/?tab=rcon")
 	})
 
-	r.POST("/settings", func(c *gin.Context) {
+	z.engine.POST("/settings", func(c *gin.Context) {
 		var p struct {
 			TtsEndpoint            string `form:"tts_endpoint"`
 			RconAutoStart          bool   `form:"rcon_auto_start"`
+			YoutubeAutoStart       bool   `form:"youtube_auto_start"`
 			NoMappedRewardCommands bool   `form:"no_mapped_reward_commands"`
 			SoundVolume            int    `form:"sound_volume"`
+			StaticCSRF             string `form:"static_csrf"`
+
+			CSRF string `form:"csrf"`
 		}
 
 		if err := c.ShouldBind(&p); err != nil {
@@ -606,35 +910,58 @@ func main() {
 			return
 		}
 
-		config.TtsEndpoint = p.TtsEndpoint
-		config.RconAutoStart = p.RconAutoStart
-		config.NoMappedRewardCommands = p.NoMappedRewardCommands
-		config.SoundVolume = p.SoundVolume
+		if p.CSRF != z.csrf {
+			c.AbortWithStatusJSON(http.StatusOK, gin.H{
+				"error": "bad_csrf",
+			})
+			return
+		}
 
-		if err := config.Save(); err != nil {
+		z.config.TtsEndpoint = p.TtsEndpoint
+		z.config.RconAutoStart = p.RconAutoStart
+		z.config.YoutubeAutoStart = p.YoutubeAutoStart
+		z.config.NoMappedRewardCommands = p.NoMappedRewardCommands
+		z.config.SoundVolume = p.SoundVolume
+		z.config.StaticCSRF = p.StaticCSRF
+
+		if err := z.config.Save(); err != nil {
 			log.Printf("cannot save config: %s", err)
 		}
 
 		c.Redirect(http.StatusFound, "/?tab=settings")
 	})
 
-	r.GET("/", func(c *gin.Context) {
+	z.engine.GET("/", func(c *gin.Context) {
 		tab := c.Query("tab")
 		if tab == "" {
 			tab = "twitch"
 		}
+		tables, err := z.config.ReadDir("tables")
+		if err != nil {
+			log.Printf("cannot read tables dir: %s", err)
+		} else {
+			for i, table := range tables {
+				tables[i] = strings.TrimSuffix(
+					filepath.Base(table),
+					".json",
+				)
+			}
+		}
+
 		c.HTML(http.StatusOK, "index.html", gin.H{
-			"CSRF":      csrf,
-			"Twitch":    broadcaster,
-			"TwitchBot": bot,
-			"Rcon":      rcon,
-			"IRCBot":    ircbot,
+			"CSRF":      z.csrf,
+			"Twitch":    z.tw_broadcaster,
+			"TwitchBot": z.tw_bot,
+			"Youtube":   z.yt_bot,
+			"Rcon":      z.rcon,
+			"Bot":       z.bot,
 			"Tab":       tab,
-			"Config":    config,
+			"Config":    z.config,
+			"Tables":    tables,
 		})
 	})
 
-	r.POST("/upload/assets/:name", func(c *gin.Context) {
+	z.engine.POST("/upload/assets/:name", func(c *gin.Context) {
 		data, err := c.GetRawData()
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusInternalServerError, map[string]string{
@@ -645,7 +972,7 @@ func main() {
 			return
 		}
 
-		err = config.WriteAsset(c.Param("name"), data)
+		err = z.config.WriteAsset(c.Param("name"), data)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusInternalServerError, map[string]string{
 				"error":       "write_asset_failed",
@@ -658,32 +985,127 @@ func main() {
 		c.JSON(http.StatusOK, map[string]bool{"ok": true})
 	})
 
-	if config.RconAutoStart {
-		go func() {
-			time.Sleep(2 * time.Second)
+	z.engine.GET("/tables", func(c *gin.Context) {
+		var p struct {
+			CSRF  string `form:"csrf"`
+			Name  string `form:"name"`
+			Table *Table
+		}
+		var err error
 
-			t := time.NewTicker(time.Second)
-			defer t.Stop()
-			for range t.C {
-				if rcon.IsOnline() {
-					continue
-				}
+		if err := c.ShouldBindQuery(&p); err != nil {
+			c.AbortWithError(http.StatusBadRequest, err)
+			return
+		}
 
-				log.Println("Auto-connecting to rcon server...")
-				err := rcon.Connect(config.RconAddress, config.RconPassword)
-				if err != nil {
-					log.Printf("Error: %s", err)
-				} else {
-					log.Println("Auto-connect succeeded.")
-					time.Sleep(time.Second * 5)
-				}
+		if p.CSRF != z.csrf {
+			c.JSON(http.StatusBadRequest, gin.H{"valid": false})
+			return
+		}
+
+		p.Table, err = ReadTable(z.config.zdrctConfigDir, p.Name)
+		if err != nil {
+			c.HTML(http.StatusInternalServerError, "error.html", gin.H{
+				"Error": err.Error(),
+			})
+			return
+		}
+		c.HTML(http.StatusOK, "table-editor.html", p)
+	})
+
+	z.engine.POST("/tables", func(c *gin.Context) {
+		var p struct {
+			CSRF  string `json:"csrf"`
+			Name  string `json:"name"`
+			Table *Table `json:"table"`
+		}
+
+		if err := c.ShouldBind(&p); err != nil {
+			c.AbortWithError(http.StatusBadRequest, err)
+			return
+		}
+
+		if p.CSRF != z.csrf && p.Table == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"valid": false})
+			return
+		}
+
+		p.Table.Name = p.Name
+		p.Table.filepath = filepath.Join(
+			z.config.zdrctConfigDir,
+			"tables",
+			url.QueryEscape(p.Name)+".json",
+		)
+		if err := p.Table.Save(); err != nil {
+			c.String(http.StatusInternalServerError, err.Error())
+			return
+		}
+		c.HTML(http.StatusOK, "table-editor.html", p)
+	})
+	return nil
+}
+
+func (z *ZDRCT) rconAutoStarter() {
+	time.Sleep(2 * time.Second)
+
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for range t.C {
+		if z.rcon.IsOnline() {
+			continue
+		}
+
+		log.Println("Auto-connecting to rcon server...")
+		err := z.rcon.Connect(z.config.RconAddress, z.config.RconPassword)
+		if err != nil {
+			log.Printf("Error: %s", err)
+		} else {
+			log.Println("Auto-connect succeeded.")
+			time.Sleep(time.Second * 5)
+		}
+	}
+}
+
+func (z *ZDRCT) youtubeAutoResolver() {
+	delay := time.Duration(0)
+	for {
+		time.Sleep(delay)
+		if delay == 0 {
+			delay = time.Second * 30
+		} else {
+			delay = delay * 3
+			if delay > time.Minute*15 {
+				delay = time.Minute * 15
 			}
-		}()
+		}
+		if z.config.YoutubeChannelID == "" || z.yt_bot.Token == "" || z.yt_bot.LiveChatID != "" {
+			continue
+		}
+
+		log.Println("Resolving YouTube live chat ID...")
+		lcid, err := z.yt_bot.ResolveChannel(z.config.YoutubeChannelID)
+		if err != nil {
+			log.Printf("Error: %s", err)
+		} else {
+			z.yt_bot.LiveChatID = lcid
+			log.Printf("Resolved YouTube live chat: %q", lcid)
+			delay = time.Minute
+		}
+	}
+}
+
+func (z *ZDRCT) Start() error {
+	if z.config.RconAutoStart {
+		go z.rconAutoStarter()
+	}
+
+	if z.config.YoutubeAutoStart {
+		go z.youtubeAutoResolver()
 	}
 
 	l, err := net.Listen("tcp", "localhost:8666")
 	if err != nil {
-		log.Panic(err)
+		return err
 	}
 
 	log.Println("Starting up a server on http://localhost:8666/")
@@ -701,7 +1123,17 @@ func main() {
 			go exec.Command("open", "http://localhost:8666/").Run()
 		}
 	}()
-	log.Panic(r.RunListener(l))
+
+	return z.engine.RunListener(l)
+}
+
+func main() {
+	z := &ZDRCT{}
+	if err := z.Init(); err != nil {
+		log.Fatal(err)
+	}
+
+	log.Panic(z.Start())
 }
 
 // vim: ai:ts=8:sw=8:noet:syntax=go

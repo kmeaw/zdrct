@@ -1,18 +1,17 @@
       <div class="tab-pane fade{{ if eq .Tab "script" }} show active{{ end }}" id="nav-script" role="tabpanel" aria-labelledby="nav-script-tab">
-      {{ if .TwitchBot.BroadcasterID }}
-	{{ if .IRCBot.IsOnline }}
+	{{ if .Bot.IsOnline }}
 	<form method="POST" action="/loadscript" id="scriptform">
 	{{ else }}
 	<form method="POST" action="/startbot" id="scriptform">
 	{{ end }}
 	  <textarea id="script" rows="20" cols="80" name="script">{{ .Config.Script }}</textarea>
 	  <br />
-	{{ if .IRCBot.IsOnline }}
+	{{ if .Bot.IsOnline }}
 	  <input type="submit" value="Update script" />
 	{{ else }}
 	  <input type="submit" value="Start bot" />
 	{{ end }}
 	<span id="scriptmsg"></span>
+	<input type="hidden" name="csrf" value="{{ .CSRF }}" />
 	</form>
-      {{ end }}
       </div>

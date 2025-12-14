@@ -17,18 +17,23 @@ import (
 var Assets = map[string]string{}
 
 type Config struct {
-	BroadcasterToken string `json:"broadcaster_token,omitempty"`
-	BotToken         string `json:"bot_token,omitempty"`
-	Script           string `json:"-"`
-	DoomExe          string `json:"doom_exe"`
-	DoomArgs         string `json:"doom_args"`
-	RconAddress      string `json:"rcon_address,omitempty"`
-	RconPassword     string `json:"rcon_password,omitempty"`
+	BroadcasterToken    string `json:"broadcaster_token,omitempty"`
+	BotToken            string `json:"bot_token,omitempty"`
+	YoutubeToken        string `json:"youtube_token,omitempty"`
+	YoutubeRefreshToken string `json:"youtube_refresh_token,omitempty"`
+	YoutubeChannelID    string `json:"youtube_channel_id,omitempty"`
+	Script              string `json:"-"`
+	DoomExe             string `json:"doom_exe"`
+	DoomArgs            string `json:"doom_args"`
+	RconAddress         string `json:"rcon_address,omitempty"`
+	RconPassword        string `json:"rcon_password,omitempty"`
 
 	TtsEndpoint            string `json:"tts_endpoint,omitempty"`
 	RconAutoStart          bool   `json:"rcon_auto_start"`
+	YoutubeAutoStart       bool   `json:"youtube_auto_start"`
 	NoMappedRewardCommands bool   `json:"no_mapped_reward_commands"`
 	SoundVolume            int    `json:"sound_volume,omitempty"`
+	StaticCSRF             string `json:"static_csrf,omitempty"`
 
 	zdrctConfigDir string
 }
@@ -190,6 +195,9 @@ map_reward(reward_random, button_random)
 func (c *Config) SetDefaults() {
 	c.BroadcasterToken = ""
 	c.BotToken = ""
+	c.YoutubeToken = ""
+	c.YoutubeRefreshToken = ""
+	c.YoutubeChannelID = ""
 
 	c.RconAddress = "127.0.0.1:10666"
 	c.RconPassword = ""
@@ -199,6 +207,7 @@ func (c *Config) SetDefaults() {
 
 	c.TtsEndpoint = ""
 	c.RconAutoStart = false
+	c.YoutubeAutoStart = false
 	c.NoMappedRewardCommands = false
 	c.SoundVolume = 100
 }
@@ -403,6 +412,15 @@ func (c Config) InitAssetsTemplates(r *gin.Engine) error {
 
 	funcs := template.FuncMap{
 		"join": strings.Join,
+		"json": func(a any) string {
+			b, err := json.Marshal(a)
+			if err != nil {
+				return fmt.Sprintf("[error: %s]", err)
+			}
+			return string(b)
+		},
+		"add":  func(a, b int) int { return a + b },
+		"succ": func(n int) int { return n + 1 },
 	}
 
 	render := multitemplate.New()

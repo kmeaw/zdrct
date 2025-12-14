@@ -8,3 +8,4 @@ libinjector*.so
 dist.exe
 ffmpeg.exe
 libwinpthread-1.dll
+youtube.api

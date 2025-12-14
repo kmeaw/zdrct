@@ -39,7 +39,6 @@ static void* search_data_ref(void *ptr, size_t sz, void *uptr) {
     }
     return NULL;
 #elif defined(__i386__)
-    static char prologue[] = { 0x55, 0x89, 0xe5 }; /* push ebp; mov ebp, esp */
     static char pattern[] = { 0x68, 0x00, 0x00, 0x00, 0x00, 0xe8 }; /* push imm32; call... */
     memcpy(pattern + 1, &uptr, 4);
     void *m = memmem(ptr, sz, pattern, sizeof(pattern));

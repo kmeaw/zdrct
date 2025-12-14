@@ -39,7 +39,7 @@ import (
 
 type Remote struct {
 	Broadcaster *TwitchClient
-	IRCBot      *IRCBot
+	Bot         *Bot
 	Config      *RemoteEvent
 
 	ImageCache map[string]string
@@ -50,9 +50,9 @@ type Remote struct {
 	mu               sync.Mutex
 }
 
-func NewRemote(bot *IRCBot) *Remote {
+func NewRemote(bot *Bot) *Remote {
 	r := &Remote{
-		IRCBot:     bot,
+		Bot:        bot,
 		ImageCache: make(map[string]string),
 		eventSubLocation: &url.URL{
 			Scheme: "wss",
@@ -141,7 +141,7 @@ func (r *Remote) writeLoop() error {
 func (r *Remote) readLoop() error {
 	r.mu.Lock()
 	conn := r.conn
-	bot := r.IRCBot
+	bot := r.Bot
 	r.mu.Unlock()
 
 	if conn == nil {
@@ -297,7 +297,7 @@ type EventSubWelcome struct {
 func (r *Remote) readEventSub() error {
 	r.mu.Lock()
 	conn := r.connEventSub
-	bot := r.IRCBot
+	bot := r.Bot
 	r.mu.Unlock()
 
 	if conn == nil {

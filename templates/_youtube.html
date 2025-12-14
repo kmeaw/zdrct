@@ -1,0 +1,115 @@
+<div class="tab-pane fade{{ if eq .Tab "youtube" }} show active{{ end }}" id="nav-youtube" role="tabpanel" aria-labelledby="nav-youtube-tab">
+  {{ if .Youtube.Token }}
+    Hello, YouTube user {{ .Youtube.Login }}.<br />
+    Token expires at {{ .Youtube.ExpiresAt }}
+    <form action="/disconnect/youtube" method="POST">
+      <input type="submit" value="reset" />
+      <input type="hidden" name="csrf" value="{{ .CSRF }}" />
+    </form>
+
+    <form action="/youtube/live" method="POST">
+      <input type="hidden" name="csrf" value="{{ .CSRF }}" />
+      <label>
+	YouTube live chat ID: <input name="live_chat_id" id="youtube_live_chat_id" value="{{ .Youtube.LiveChatID }}" />
+      </label>
+      <br />
+      <input type="submit" value="update" />
+    </form>
+
+    <h2>YouTube live chat ID resolvers</h2>
+
+    <div class="container mt=8">
+      <div class="row">
+        <h3>Get my live chat ID</h3>
+        <form action="/youtube/api/liveBroadcasts" method="GET" class="youtube-resolver">
+          <input type="hidden" name="part" value="snippet" />
+          <input type="hidden" name="broadcastStatus" value="active" />
+          <input type="hidden" name="mine" value="true" />
+          <input type="hidden" name="csrf" value="{{ .CSRF }}" />
+          <input type="submit" value="&uarr;" />
+        </form>
+        <hr />
+      </div>
+
+      <div class="row">
+        <h3>Video ID to live broadcast</h3>
+        <p><small>https://www.youtube.com/watch?v=<b>5-tR3am1n9</b></small></p>
+        <form action="/youtube/api/videos" method="GET" class="youtube-resolver">
+          <input type="hidden" name="part" value="liveStreamingDetails" />
+          <label>
+            Video ID: <input name="id" value="" id="youtube_video_id" />
+          </label>
+          <input type="hidden" name="csrf" value="{{ .CSRF }}" />
+          <input type="submit" value="&uarr;" />
+        </form>
+        <hr />
+      </div>
+
+      <div class="row">
+        <h3>Channel ID to video ID</h3>
+        <p><small>https://www.youtube.com/channels/<b>cH4nn37-1D</b></small></p>
+        <form action="/youtube/api/search" method="GET" class="youtube-resolver">
+          <input type="hidden" name="part" value="id" />
+          <label>
+            Channel ID: <input name="channelId" value="{{ .Config.YoutubeChannelID }}" id="youtube_channel_id" />
+          </label>
+          <input type="hidden" name="eventType" value="live" />
+          <input type="hidden" name="type" value="video" />
+          <input type="hidden" name="csrf" value="{{ .CSRF }}" />
+          <input type="submit" value="&uarr;" />
+        </form>
+        <hr />
+      </div>
+
+      <div class="row">
+        <h3>Channel handle to Channel ID</h3>
+        <p><small>https://www.youtube.com/@<b>channel_handle</b></small></p>
+        <form action="/youtube/api/channels" method="GET" class="youtube-resolver">
+          <input type="hidden" name="part" value="id" />
+          <label>
+            Handle: <input name="forHandle" value="" />
+          </label>
+          <input type="hidden" name="csrf" value="{{ .CSRF }}" />
+          <input type="submit" value="&uarr;" />
+        </form>
+        <hr />
+      </div>
+
+      <div class="row">
+        <h3>Channel owner username to Channel ID</h3>
+        <p><small>https://www.youtube.com/user/<b>username</b></small></p>
+        <form action="/youtube/api/channels" method="GET" class="youtube-resolver">
+          <input type="hidden" name="part" value="id" />
+          <label>
+            Username: <input name="forUsername" value="" />
+          </label>
+          <input type="hidden" name="csrf" value="{{ .CSRF }}" />
+          <input type="submit" value="&uarr;" />
+        </form>
+        <hr />
+      </div>
+
+      <div class="row">
+        <h3>Get my Channel ID</h3>
+        <form action="/youtube/api/channels" method="GET" class="youtube-resolver">
+          <input type="hidden" name="part" value="id" />
+          <input type="hidden" name="mine" value="true" />
+          <input type="hidden" name="csrf" value="{{ .CSRF }}" />
+          <input type="submit" value="&uarr;" />
+        </form>
+        <hr />
+      </div>
+    </div>
+  {{ else }}
+    <div class="container mt=8">
+      <div class="row">
+        YouTube API is not connected.
+        <form action="/connect/youtube" method="POST">
+          <input type="submit" value="connect" />
+          <input type="hidden" name="csrf" value="{{ .CSRF }}" />
+          <input type="hidden" name="token" value="{{ .Twitch.Token }}" />
+        </form>
+      </div>
+    </div>
+  {{ end }}
+</div>

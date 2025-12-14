@@ -1,4 +1,6 @@
 *.o
 *.dll
 *.so
+*.pdb
+*.lib
 *.exe

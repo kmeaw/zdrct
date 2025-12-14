@@ -1,10 +1,10 @@
 !INCLUDE "MUI.nsh"
 
+Unicode false
 Name "ZDRCT"
 OutFile "dist.exe"
 InstallDir "$PROGRAMFILES\zdrct"
 RequestExecutionLevel user
-Unicode false
 XPStyle on
 ShowInstDetails show
 
@@ -24,6 +24,7 @@ Section "install"
 	File "LICENSE.txt"
 	File "c\libinjector32.dll"
 	File "c\libinjector64.dll"
+	File "c\pk\libinjectorpk32.dll"
 	File "ffmpeg.exe"
 	File "libwinpthread-1.dll"
 
@@ -40,6 +41,7 @@ SectionEnd
 Section "Uninstall"
 	RMDir /r "$INSTDIR\templates"
 	RMDir /r "$INSTDIR\assets"
+	Delete "$INSTDIR\libinjectorpk32.dll"
 	Delete "$INSTDIR\libinjector32.dll"
 	Delete "$INSTDIR\libinjector64.dll"
 	Delete "$INSTDIR\zdrct.exe"

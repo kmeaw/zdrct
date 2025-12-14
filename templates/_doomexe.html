@@ -14,7 +14,7 @@
 		 <label for="doomargs">Arguments:</label>
 	       </div>
 	       <div class="col-sm-10">
-                 <textarea name="args" class="saveme" data-name="doomargs">{{ .Config.DoomArgs }}</textarea>
+                 <textarea id="doomargs" name="args" class="saveme" data-name="doomargs">{{ .Config.DoomArgs }}</textarea>
 	       </div>
 	     </div>
 	     <div class="row">
@@ -23,6 +23,7 @@
 	       </div>
 	     </div>
 	   </div>
+	   <input type="hidden" name="csrf" value="{{ .CSRF }}" />
 	</form>
       </div>
 

@@ -4,7 +4,13 @@ window.addEventListener('DOMContentLoaded', (event) => {
   const $message = document.getElementById('message');
 
   const usp = new URLSearchParams(location.hash.substr(1));
-  fetch('/oauth', {
+  let target = '/oauth';
+  let tab = 'twitch';
+  if (usp.get('scope') == 'https://www.googleapis.com/auth/youtube') {
+    target = '/oauth/youtube';
+    tab = 'youtube';
+  }
+  fetch(target, {
     method: 'POST',
     mode: 'same-origin',
     cache: 'no-cache',
@@ -27,7 +33,7 @@ window.addEventListener('DOMContentLoaded', (event) => {
 	throw 'Bad result: ' + JSON.stringify(result);
       }
 
-      location.replace('/');
+      location.replace('/?tab=' + encodeURIComponent(tab));
     })
     .catch((e) => $message.innerText = 'An error has occurred: ' + e);
 });

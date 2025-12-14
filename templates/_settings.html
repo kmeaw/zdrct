@@ -8,12 +8,21 @@
 	  <label>Auto-start RCon client: <input type="checkbox" name="rcon_auto_start" value="1" {{ if .Config.RconAutoStart }}checked="checked"{{ end }} /></label>
 	  <br />
 
+	  <label>Auto-resolve YouTube livestream ID: <input type="checkbox" name="youtube_auto_start" value="1" {{ if .Config.YoutubeAutoStart }}checked="checked"{{ end }} /></label>
+	  <br />
+
 	  <label>Disable chat commands for Twitch-mapped rewards: <input type="checkbox" name="no_mapped_reward_commands" value="1" {{ if .Config.NoMappedRewardCommands }}checked="checked"{{ end }} /></label>
 	  <br />
 
 	  <label>Sound volume: <input name="sound_volume" type="range" min="1" max="100" value="{{ .Config.SoundVolume }}" /></label>
 	  <br />
 
+	  <label>Static CSRF token: <input name="static_csrf" type="text" value="{{ .Config.StaticCSRF }}" /></label>
+	  <br />
+	  <small>Leave this field empty to use dynamic CSRF token (recommended).</small>
+	  <br />
+
+	  <input type="hidden" name="csrf" value="{{ .CSRF }}" />
 	  <input type="submit" value="Save" />
 	</form>
       </div>

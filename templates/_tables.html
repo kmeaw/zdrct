@@ -1,0 +1,20 @@
+      <div class="tab-pane fade{{ if eq .Tab "tables" }} show active{{ end }}" id="nav-tables" role="tabpanel" aria-labelledby="nav-tables-tab">
+        <div class="table-container container mt=12">
+	  <div class="row">
+	    <form method="POST" action="/tables" id="table-form">
+              <input list="table-list" type="text" id="table-name" name="name" placeholder="Table name" />
+	      <datalist id="table-list">
+	        {{ range .Tables }}
+		  <option value="{{ . }}" />
+		{{ end }}
+	      </datalist>
+
+	      <input type="hidden" name="csrf" value="{{ .CSRF }}" />
+	      <input type="submit" value="Select" />
+	    </form>
+	  </div>
+	</div>
+
+        <div class="table-container container mt=12" id="table-editor">
+        </div>
+      </div>

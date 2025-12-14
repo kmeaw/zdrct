@@ -1,0 +1,38 @@
+	  <h2>Table {{ .Name }}</h2>
+          <div class="controls">
+            <button id="add-row">➕ Add Row</button>
+            <button id="add-col">➕ Add Column</button>
+          </div>
+
+          <table id="editable-table">
+            <thead>
+              <tr id="header-row">
+                <th class="handle-header" aria-hidden="true">⇅</th>
+
+                <th class="col-header col-id"><span class="col-title">ID</span></th>
+		{{ range .Table.Columns }}
+                <th class="col-header"><span class="col-title" contenteditable="true">{{ .Name }}</span><button class="remove-col-btn" title="Remove column">🗑️</button></th>
+		{{ end }}
+
+              </tr>
+            </thead>
+
+            <tbody id="table-body">
+	    {{ range $i, $item := .Table.Data }}
+              <tr draggable="true">
+                <td class="handle">☰</td>
+                <td>{{ succ $i }}</td>
+		{{ range $item }}
+                <td contenteditable="true">{{ . }}</td>
+		{{ end }}
+                <td class="remove-row"><button class="remove-row-btn">🗑️</button></td>
+              </tr>
+            {{ end }}
+            </tbody>
+          </table>
+	  <script type="text/javascript" src="tables.js"></script>
+	  <form action="/tables" method="POST" id="table-save-form">
+            <input type="hidden" name="name" value="{{ .Name }}" />
+            <input type="hidden" name="csrf" value="{{ .CSRF }}" />
+            <input type="submit" value="Save" />
+          </form>

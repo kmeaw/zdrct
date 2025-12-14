@@ -57,7 +57,7 @@ type Command struct {
 	Image string `json:"image"`
 }
 
-type IRCBot struct {
+type Bot struct {
 	Balances     map[string]int
 	UserName     string
 	AdminName    string
@@ -76,21 +76,24 @@ type IRCBot struct {
 	crediter *time.Ticker
 	online   bool
 
+	confDir string
+
 	e *env.Env
 
 	tw_broadcaster *TwitchClient
 	tw_bot         *TwitchClient
-	TtsEndpoint    string
+	yt_bot         *YoutubeClient
+	hclient        *http.Client
+	ircClient      *irc.Client
+	ircConn        net.Conn
 
-	client  *irc.Client
-	hclient *http.Client
+	TtsEndpoint string
 
-	conn net.Conn
-	mu   *sync.Mutex
+	mu *sync.Mutex
 }
 
-func NewIRCBot(tw_broadcaster, tw_bot *TwitchClient) *IRCBot {
-	return &IRCBot{
+func NewBot(tw_broadcaster, tw_bot *TwitchClient, yt_bot *YoutubeClient, confDir string) *Bot {
+	return &Bot{
 		Balances:    make(map[string]int),
 		LastBuckets: make(map[string]time.Time),
 		RewardMap:   make(map[string]*Command),
@@ -98,6 +101,9 @@ func NewIRCBot(tw_broadcaster, tw_bot *TwitchClient) *IRCBot {
 
 		tw_broadcaster: tw_broadcaster,
 		tw_bot:         tw_bot,
+		yt_bot:         yt_bot,
+
+		confDir: confDir,
 
 		hclient: &http.Client{Timeout: 5 * time.Second},
 
@@ -105,9 +111,10 @@ func NewIRCBot(tw_broadcaster, tw_bot *TwitchClient) *IRCBot {
 	}
 }
 
-func (b *IRCBot) handleConn() {
+func (b *Bot) handleIRCConn() {
 	b.mu.Lock()
-	client := b.client
+	client := b.ircClient
+	ircConn := b.ircConn
 	b.mu.Unlock()
 
 	client.CapRequest("twitch.tv/tags", true)
@@ -117,24 +124,35 @@ func (b *IRCBot) handleConn() {
 	if err != nil {
 		log.Printf("IRC error: %s", err)
 		b.mu.Lock()
-		b.online = false
-		b.conn.Close()
-		b.conn = nil
+		b.ircConn = nil
 		b.mu.Unlock()
+		ircConn.Close()
 	}
 }
 
-func (b *IRCBot) Reply(format string, rest ...interface{}) {
-	b.client.WriteMessage(&irc.Message{
-		Command: "PRIVMSG",
-		Params: []string{
-			"#" + b.ChannelName,
-			fmt.Sprintf(format, rest...),
-		},
-	})
+func (b *Bot) Reply(format string, rest ...interface{}) {
+	irc_client := b.ircClient
+	yt_client := b.yt_bot
+
+	body := fmt.Sprintf(format, rest...)
+	if irc_client != nil {
+		log.Printf("twitch <- %s", body)
+		irc_client.WriteMessage(&irc.Message{
+			Command: "PRIVMSG",
+			Params: []string{
+				"#" + b.ChannelName,
+				body,
+			},
+		})
+	}
+
+	if yt_client != nil && yt_client.Token != "" {
+		log.Printf("youtube <- %s", body)
+		yt_client.SendMessage(context.Background(), body)
+	}
 }
 
-func (b *IRCBot) ProcessMessage(ctx context.Context, from, msg string) error {
+func (b *Bot) ProcessMessage(ctx context.Context, from, msg string) error {
 	flds := strings.Fields(msg)
 	if len(flds) == 0 {
 		return nil
@@ -150,6 +168,8 @@ func (b *IRCBot) ProcessMessage(ctx context.Context, from, msg string) error {
 	if _, ok := b.Balances[from]; !ok {
 		b.Balances[from] = 5
 	}
+
+	log.Printf("%s: %s", from, msg)
 
 	if strings.HasPrefix(flds[0], "!") {
 		cmd := flds[0][1:]
@@ -192,13 +212,6 @@ func (b *IRCBot) ProcessMessage(ctx context.Context, from, msg string) error {
 				}
 				return result
 			})
-			b.e.Set("forth", func(tokens ...string) (interface{}, error) {
-				b.mu.Lock()
-				e := b.e.DeepCopy()
-				b.mu.Unlock()
-
-				return b.EvalForth(ctx, e, tokens...)
-			})
 
 			_, err = vm.ExecuteContext(ctx, e, nil, script)
 			if err != nil {
@@ -211,7 +224,7 @@ func (b *IRCBot) ProcessMessage(ctx context.Context, from, msg string) error {
 	return nil
 }
 
-func (b *IRCBot) Handle(c *irc.Client, m *irc.Message) {
+func (b *Bot) Handle(c *irc.Client, m *irc.Message) {
 	var err error
 
 	b.mu.Lock()
@@ -237,6 +250,9 @@ func (b *IRCBot) Handle(c *irc.Client, m *irc.Message) {
 		}
 
 		from := m.Prefix.User
+		if display_name, ok := m.GetTag("display-name"); ok && strings.ToLower(display_name) == strings.ToLower(from) {
+			from = display_name
+		}
 		if msgid, _ := m.GetTag("msg-id"); msgid == "highlighted-message" {
 			msg = "!!event_highlighted " + msg
 		}
@@ -247,7 +263,7 @@ func (b *IRCBot) Handle(c *irc.Client, m *irc.Message) {
 	}
 }
 
-func (b *IRCBot) GiveCredits() {
+func (b *Bot) GiveCredits() {
 	for range b.crediter.C {
 		b.mu.Lock()
 		for k := range b.Balances {
@@ -257,14 +273,14 @@ func (b *IRCBot) GiveCredits() {
 	}
 }
 
-func (b *IRCBot) IsOnline() bool {
+func (b *Bot) IsOnline() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	return b.online
 }
 
-func (b *IRCBot) LoadScript(config Config) error {
+func (b *Bot) LoadScript(config Config) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -561,6 +577,14 @@ func is_reward() {
 		}
 		return n
 	}))
+	errors = append(errors, b.e.Define("float", func(token string) float64 {
+		f, err := strconv.ParseFloat(token, 64)
+		if err != nil {
+			log.Printf("cannot convert %q to float: %s", token, err)
+			return 0.0
+		}
+		return f
+	}))
 	errors = append(errors, b.e.Define("join", strings.Join))
 	errors = append(errors, b.e.Define("rcon", func(format string, args ...interface{}) bool {
 		b.mu.Lock()
@@ -586,6 +610,14 @@ func is_reward() {
 	}))
 	errors = append(errors, b.e.Define("randn", func(n int) int {
 		return rand.Intn(n)
+	}))
+	errors = append(errors, b.e.Define("table", func(name string) *Table {
+		table, err := ReadTable(b.confDir, name)
+		if err != nil {
+			panic(fmt.Errorf("error opening table %q: %w", name, err))
+			return nil
+		}
+		return table
 	}))
 	errors = append(errors, b.e.Define("roll", func(args ...interface{}) interface{} {
 		if len(args) == 0 {
@@ -668,7 +700,6 @@ func is_reward() {
 		return
 	}))
 	errors = append(errors, b.e.Define("eval", nil))
-	errors = append(errors, b.e.Define("forth", nil))
 	for _, err := range errors {
 		if err != nil {
 			return err
@@ -676,6 +707,8 @@ func is_reward() {
 	}
 	errors = append(errors, b.e.Define("system", func(arg0 string, args ...string) {
 		cmd := exec.Command(arg0, args...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
 		err := cmd.Start()
 		if err != nil {
 			log.Printf("cannot start %q: %s", arg0, err)
@@ -703,7 +736,80 @@ func is_reward() {
 	return nil
 }
 
-func (b *IRCBot) Start() error {
+func (b *Bot) startIRC() {
+	t := time.NewTicker(time.Second * 5)
+	defer t.Stop()
+	for range t.C {
+		b.mu.Lock()
+		token := b.tw_bot.Token
+		b.mu.Unlock()
+
+		if token == "" {
+			continue
+		}
+
+		b.mu.Lock()
+		b.AdminName = b.tw_broadcaster.Login
+		b.UserName = b.tw_bot.Login
+		b.ChannelName = b.tw_broadcaster.Login
+		b.mu.Unlock()
+
+		log.Println("connecting to Twitch IRC...")
+
+		ircConn, err := tls.Dial("tcp", "irc.chat.twitch.tv:6697", nil)
+		if err != nil {
+			log.Printf("Error dialing Twitch IRC endpoint: %s", err)
+			continue
+		}
+
+		ircClient := irc.NewClient(ircConn, irc.ClientConfig{
+			Nick:    b.UserName,
+			Pass:    "oauth:" + token,
+			User:    b.UserName,
+			Name:    b.UserName,
+			Handler: b,
+		})
+
+		b.mu.Lock()
+		b.ircConn = ircConn
+		b.ircClient = ircClient
+		b.mu.Unlock()
+		b.handleIRCConn()
+	}
+}
+
+func (b *Bot) startYoutube() {
+	t := time.NewTicker(time.Second * 5)
+	defer t.Stop()
+	for range t.C {
+		b.mu.Lock()
+		token := b.yt_bot.Token
+		b.mu.Unlock()
+
+		if token == "" {
+			continue
+		}
+
+		if b.yt_bot.LiveChatID == "" {
+			continue
+		}
+
+		log.Println("connecting to YouTube live chat...")
+		ctx := context.Background()
+
+		msgs, err := b.yt_bot.Messages(ctx)
+		if err != nil {
+			log.Printf("error getting YouTube messages: %s", err)
+			continue
+		}
+
+		for msg := range msgs {
+			b.ProcessMessage(ctx, msg.From, msg.Body)
+		}
+	}
+}
+
+func (b *Bot) Start() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -711,43 +817,27 @@ func (b *IRCBot) Start() error {
 		return nil
 	}
 
-	if b.tw_bot.Token == "" {
-		return fmt.Errorf("twitch token is not set")
-	}
-
 	if b.crediter == nil {
 		b.crediter = time.NewTicker(time.Second * 2)
 		go b.GiveCredits()
 	}
 
-	conn, err := tls.Dial("tcp", "irc.chat.twitch.tv:6697", nil)
-	if err != nil {
-		return err
-	}
+	go b.startIRC()
+	go b.startYoutube()
 
-	b.client = irc.NewClient(conn, irc.ClientConfig{
-		Nick:    b.UserName,
-		Pass:    "oauth:" + b.tw_bot.Token,
-		User:    b.UserName,
-		Name:    b.UserName,
-		Handler: b,
-	})
-
-	b.conn = conn
-	go b.handleConn()
 	b.online = true
 
 	return nil
 }
 
-func (b *IRCBot) GetButtons() []*Command {
+func (b *Bot) GetButtons() []*Command {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	return b.Buttons
 }
 
-func (b *IRCBot) GetRewardsMap() map[string]*Command {
+func (b *Bot) GetRewardsMap() map[string]*Command {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 

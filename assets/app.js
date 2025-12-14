@@ -1,34 +1,80 @@
 'use strict';
 
 window.addEventListener('DOMContentLoaded', (event) => {
-	const $script = document.getElementById('script');
-	const $scriptform = document.getElementById('scriptform');
-	const $scriptmsg = document.getElementById('scriptmsg');
+	const $ = document.getElementById.bind(document);
 
-	const $submit = $scriptform.querySelector('input[type=submit]');
-	const $rewards_table = document.getElementById('rewards_table');
+	const $script = $('script');
+	const $scriptform = $('scriptform');
+	const $scriptmsg = $('scriptmsg');
 
-	const $iwad = document.getElementById('wizard_iwad');
-	const $patch = document.getElementById('wizard_image');
-	const $wizard_rescale = document.getElementById('wizard_rescale');
-	const $sound = document.getElementById('wizard_sound');
-	const $canvas = document.getElementById('wizard_lump_canvas');
-	const $audio = document.getElementById('wizard_lump_audio');
-	const $wizard_msg = document.getElementById('wizard_msg');
-	const $wizard_generate = document.getElementById('wizard_generate');
-	const $wizard_id = document.getElementById('wizard_id');
-	const $wizard_name = document.getElementById('wizard_name');
-	const $wizard_reply = document.getElementById('wizard_reply');
+	const $submit = $scriptform ? $scriptform.querySelector('input[type=submit]') : null;
+	const $rewards_table = $('rewards_table');
 
-	const $bwizard_id = document.getElementById('buttonwizard_id');
-	const $bwizard_name = document.getElementById('buttonwizard_name');
-	const $bwizard_image = document.getElementById('buttonwizard_image');
-	const $bwizard_price = document.getElementById('buttonwizard_price');
-	const $bwizard_code = document.getElementById('buttonwizard_code');
-	const $bwizard_generate = document.getElementById('buttonwizard_generate');
+	const $iwad = $('wizard_iwad');
+	const $patch = $('wizard_image');
+	const $wizard_rescale = $('wizard_rescale');
+	const $sound = $('wizard_sound');
+	const $canvas = $('wizard_lump_canvas');
+	const $audio = $('wizard_lump_audio');
+	const $wizard_msg = $('wizard_msg');
+	const $wizard_generate = $('wizard_generate');
+	const $wizard_id = $('wizard_id');
+	const $wizard_name = $('wizard_name');
+	const $wizard_reply = $('wizard_reply');
+
+	const $bwizard_id = $('buttonwizard_id');
+	const $bwizard_name = $('buttonwizard_name');
+	const $bwizard_image = $('buttonwizard_image');
+	const $bwizard_price = $('buttonwizard_price');
+	const $bwizard_code = $('buttonwizard_code');
+	const $bwizard_generate = $('buttonwizard_generate');
+
+	const $table_editor = $('table-editor');
+	const $table_form = $('table-form');
+	const $table_name = $('table-name');
 
 	const reader = new FileReader();
 
+	document.querySelectorAll('.youtube-resolver').forEach((frm) => frm.addEventListener('submit', async (event) => {
+		event.preventDefault();
+		event.stopPropagation();
+
+		const params = new URLSearchParams(new FormData(frm));
+
+		const resp = await fetch(frm.action + '?' + params.toString(), {
+			cache: 'no-cache',
+			credentials: 'omit',
+			headers: { 'Accept': 'application/json' }
+		});
+		if (!resp.ok) throw Error(`HTTP ${resp.status}`);
+		const data = await resp.json();
+		try {
+			const item = data.result.items[0];
+			if (item === undefined) {
+				return;
+			}
+			if (item.kind === 'youtube#channel') {
+				$('youtube_channel_id').value = item.id;
+				$('youtube_channel_id').focus();
+				navigator.sendBeacon('/youtube/channel',
+					new URLSearchParams({
+						csrf: csrf,
+						channel_id: item.id,
+					})
+				);
+			} else if (item.kind == 'youtube#searchResult' && item.id.kind === 'youtube#video') {
+				$('youtube_video_id').value = item.id.videoId;
+				$('youtube_video_id').focus();
+			} else if (item.kind == 'youtube#video' && item.liveStreamingDetails && item.liveStreamingDetails.activeLiveChatId) {
+				$('youtube_live_chat_id').value = item.liveStreamingDetails.activeLiveChatId;
+				$('youtube_live_chat_id').focus();
+			}
+		} catch(e) {
+			console.error(e);
+		}
+	}));
+
+	if ($rewards_table)
 	$rewards_table.querySelectorAll('form.delete-form').forEach((frm) => frm.addEventListener('submit', (event) => {
 		event.preventDefault();
 		event.stopPropagation();
@@ -53,13 +99,14 @@ window.addEventListener('DOMContentLoaded', (event) => {
 					return true;
 				}
 
-				frm.innerText = json.description || json.error;
+				frm.textContent = json.description || json.error;
 			})
-			.catch((err) => frm.innerText = err);
+			.catch((err) => frm.textContent = err);
 
 		return false;
 	}));
 
+	if ($scriptform) {
 	$submit.disabled = true;
 
 	const cm = CodeMirror.fromTextArea($script,
@@ -109,7 +156,7 @@ window.addEventListener('DOMContentLoaded', (event) => {
 				}
 
 				if (json.error) {
-					$scriptmsg.innerText = json.description || json.error;
+					$scriptmsg.textContent = json.description || json.error;
 				} else {
 					location.search = '?tab=script';
 				}
@@ -119,6 +166,7 @@ window.addEventListener('DOMContentLoaded', (event) => {
 	});
 
 	$submit.disabled = false;
+	}
 
 	$iwad.addEventListener('change', (event) => {
 		if ($iwad.files.length !== 1) {
@@ -134,7 +182,7 @@ window.addEventListener('DOMContentLoaded', (event) => {
 		try {
 			iwad = new IWAD(arrayBuffer);
 		} catch(err) {
-			$wizard_msg.innerText = 'ERROR: ' + err;
+			$wizard_msg.textContent = 'ERROR: ' + err;
 			return false;
 		}
 
@@ -189,11 +237,11 @@ window.addEventListener('DOMContentLoaded', (event) => {
 				$audio.src = null;
 			}
 		});
-		$wizard_msg.innerText = '';
+		$wizard_msg.textContent = '';
 	};
 
 	reader.addEventListener('load', (event) => {
-		$wizard_msg.innerText = 'Loading IWAD, please wait...';
+		$wizard_msg.textContent = 'Loading IWAD, please wait...';
 		const arrayBuffer = event.target.result;
 		setTimeout(load_wad, 100, arrayBuffer);
 	});
@@ -279,11 +327,11 @@ ${camel}.Name = ${JSON.stringify($wizard_name.value)}
 				$bwizard_name.value = $wizard_name.value;
 				$bwizard_code.value = 'return spawn_actor(' + camel + ')';
 				$bwizard_image.value = encodeURIComponent(id) + '.png';
-				document.getElementById('nav-buttonwizard-tab').click();
+				$('nav-buttonwizard-tab').click();
 				$bwizard_price.focus();
 			})
 			.catch((err) => {
-				$wizard_msg.innerText = 'ERROR: ' + err;
+				$wizard_msg.textContent = 'ERROR: ' + err;
 				$wizard_msg.scrollIntoView();
 			});
 	});
@@ -324,7 +372,38 @@ map_reward(reward_${$bwizard_id.value}, button_${$bwizard_id.value})
 		}
 
 		cm.setValue(cm.getValue() + '\n' + new_code);
-		document.getElementById('nav-script-tab').click();
+		$('nav-script-tab').click();
+	});
+
+	$table_form.addEventListener('submit', async (event) => {
+		event.stopPropagation();
+		event.preventDefault();
+
+		if ($table_name.value.length <= 1) {
+			$table_name.focus();
+			return false;
+		}
+
+		const params = new URLSearchParams(new FormData($table_form));
+
+		try {
+			const resp = await fetch($table_form.action + '?' + params.toString());
+			if (!resp.ok) {
+				throw new Error(`HTTP ${resp.status}`);
+			}
+
+			$table_editor.innerHTML = await resp.text();
+			$table_editor.querySelectorAll('script').forEach($s0 => {
+				const $s1 = document.createElement('script');
+				Array.from($s0.attributes).forEach(a => {
+					$s1.setAttribute(a.name, a.value);
+				});
+				$s1.textContent = $s0.textContent;
+				$s0.parentNode.replaceChild($s1, $s0);
+			});
+		} catch(e) {
+			$table_editor.textContent = 'ERROR: ' + e;
+		}
 	});
 
 	setInterval(() => {

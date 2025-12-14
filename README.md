@@ -102,6 +102,9 @@ It is meant to be used as a rate-limiting facility.
 ### int(s)
 Coerces s to an integer. Returns -1 if it fails.
 
+### float(s)
+Coerces s to a float. Returns 0.0 if it fails.
+
 ### join(elems, sep)
 Returns elems[0] + sep + elems[1] + sep + ... + sep + elems[N-1]
 

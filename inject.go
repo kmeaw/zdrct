@@ -138,7 +138,12 @@ func inject(exePath string, args ...string) error {
 
 	var libinjector_name string
 	if isWow64 {
-		libinjector_name = filepath.Join(wd, "libinjector32.dll")
+		full := exePath + " " + strings.Join(args, " ")
+		if strings.Contains(strings.ToLower(full), "painkiller") {
+			libinjector_name = filepath.Join(wd, "libinjectorpk32.dll")
+		} else {
+			libinjector_name = filepath.Join(wd, "libinjector32.dll")
+		}
 	} else {
 		libinjector_name = filepath.Join(wd, "libinjector64.dll")
 	}

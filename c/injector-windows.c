@@ -48,7 +48,7 @@ static void* scan(const DWORD perm_filter, void*(*cb)(void *, size_t, void *), v
         if (mbi.State == MEM_FREE) continue;
         if (mbi.Protect != perm_filter) continue;
 
-        printf("base %p abase %p state %x protect %x uptr %p\n", mbi.BaseAddress, mbi.AllocationBase, mbi.State, mbi.Protect, uptr);
+        printf("base %p abase %p state %lx protect %lx uptr %p\n", mbi.BaseAddress, mbi.AllocationBase, mbi.State, mbi.Protect, uptr);
         ptr = cb((void *) mbi.BaseAddress, (size_t) mbi.RegionSize, uptr);
         if (ptr != NULL) break;
     }

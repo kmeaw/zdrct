@@ -2,6 +2,7 @@
 	<form method="POST" action="/rcon/config">
 	  RCON address: <input name="addr" value="{{ .Rcon.Addr }}" /><br />
 	  RCON password: <input name="password" type="password" value="{{ .Rcon.Password }}" class="saveme" data-name="rconpswd" /><br />
+	  <input type="hidden" name="csrf" value="{{ .CSRF }}" />
 	  <input type="submit" value="Set" />
 	</form>
 
@@ -10,6 +11,7 @@
 	  online
 	  <form method="POST" action="/rcon">
 	    test: <input name="command" /> <input type="submit" value="go" />
+	    <input type="hidden" name="csrf" value="{{ .CSRF }}" />
 	  </form>
 	  {{ else }}
 	  offline
