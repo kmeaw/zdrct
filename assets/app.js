@@ -130,7 +130,8 @@ window.addEventListener('DOMContentLoaded', (event) => {
 			},
 			redirect: 'error',
 			body: new URLSearchParams({
-				script: $script.value
+				script: $script.value,
+				csrf: csrf
 			}).toString()
 		});
 
