@@ -537,7 +537,7 @@ func (r *Remote) sendConfig() error {
 		}
 		req.Header.Set("Content-Type", mw.FormDataContentType())
 		req.Header.Set("Authorization", "OAuth "+r.Broadcaster.Token)
-		req.Header.Set("User-Agent", "github.com/kmeaw/zdrct")
+		req.Header.Set("User-Agent", "github.com/kmeaw/zdrct "+Version)
 
 		resp, err := cl.Do(req)
 		if err != nil {

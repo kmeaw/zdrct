@@ -961,6 +961,8 @@ func (z *ZDRCT) initAPI() error {
 			"Tab":       tab,
 			"Config":    z.config,
 			"Tables":    tables,
+			"Version":   Version,
+			"BuildTime": BuildTime,
 		})
 	})
 
