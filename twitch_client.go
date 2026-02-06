@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -35,20 +36,20 @@ import (
 
 const HELIX_REWARDS = "https://api.twitch.tv/helix/channel_points/custom_rewards"
 const APP_ID = "ehx3943o3ttw0nplenassv0pme8yvb"
-const DEFAULT_APP_SCOPES = "chat:read,chat:edit,channel:read:redemptions,channel:manage:redemptions"
-const DEFAULT_BOT_SCOPES = "chat:read,chat:edit"
+const DEFAULT_APP_SCOPES = "chat:read,chat:edit,channel:read:redemptions,channel:manage:redemptions,moderator:read:followers"
+const DEFAULT_BOT_SCOPES = "chat:read,chat:edit,moderator:manage:shoutouts"
 
 var ErrNoRewards = fmt.Errorf("no rewards")
 
 type TwitchClient struct {
-	Token         string
-	Login         string
-	BroadcasterID int64
-	ExpiresAt     time.Time
-	Scopes        []string
-	Purpose       string
-	Rewards       []*Reward
-	rewardCache   map[string]*Reward
+	Token       string
+	Login       string
+	UserID      int64
+	ExpiresAt   time.Time
+	Scopes      []string
+	Purpose     string
+	Rewards     []*Reward
+	rewardCache map[string]*Reward
 
 	h  *http.Client
 	mu *sync.Mutex
@@ -119,7 +120,30 @@ func (c *TwitchClient) GetAuthLink(redirect_url, csrf_token string) string {
 	return u.String()
 }
 
-func (c *TwitchClient) apiCall(ctx context.Context, api_url string, payload interface{}, result interface{}) (err error) {
+func (c *TwitchClient) GetStreamInfo(ctx context.Context, user_id int64) (*StreamInfo, error) {
+	var v StreamsInfo
+
+	err := c.apiCall(
+		ctx,
+		"https://api.twitch.tv/helix/streams",
+		map[string]any{
+			"_method": "GET",
+			"user_id": user_id,
+		},
+		&v,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(v.Data) == 0 {
+		return nil, fmt.Errorf("no streams for user %d", user_id)
+	}
+
+	return &v.Data[0], nil
+}
+
+func (c *TwitchClient) apiCall(ctx context.Context, api_url string, payload any, result any) (err error) {
 	var req *http.Request
 	var resp *http.Response
 	var data []byte
@@ -134,9 +158,8 @@ func (c *TwitchClient) apiCall(ctx context.Context, api_url string, payload inte
 		return err
 	}
 	qs := u.Query()
-	if c.BroadcasterID != 0 {
-
-		qs.Set("broadcaster_id", strconv.FormatInt(c.BroadcasterID, 10))
+	if c.UserID != 0 {
+		qs.Set("broadcaster_id", strconv.FormatInt(c.UserID, 10))
 		u.RawQuery = qs.Encode()
 		api_url = u.String()
 	}
@@ -146,10 +169,10 @@ func (c *TwitchClient) apiCall(ctx context.Context, api_url string, payload inte
 	} else {
 		method := "POST"
 
-		if plm, ok := payload.(map[string]interface{}); ok {
+		if plm, ok := payload.(map[string]any); ok {
 			if mi, ok := plm["_method"]; ok {
 				if ms, ok := mi.(string); ok {
-					m := make(map[string]interface{})
+					m := make(map[string]any)
 					for k := range plm {
 						if k == "_method" {
 							continue
@@ -168,12 +191,12 @@ func (c *TwitchClient) apiCall(ctx context.Context, api_url string, payload inte
 		}
 
 		if method == "DELETE" || method == "GET" {
-			plm, ok := payload.(map[string]interface{})
+			plm, ok := payload.(map[string]any)
 			if !ok {
-				return fmt.Errorf("unexpected type: %T, expecting map[string]interface{}", payload)
+				return fmt.Errorf("unexpected type: %T, expecting map[string]any", payload)
 			}
 			for k, v := range plm {
-				qs.Set(k, fmt.Sprintf("%s", v))
+				qs.Set(k, fmt.Sprintf("%v", v))
 			}
 			u.RawQuery = qs.Encode()
 			api_url = u.String()
@@ -262,7 +285,9 @@ type twitchRedemptionsReply struct {
 }
 
 type twitchSubscriptionCondition struct {
-	BroadcasterUserId string `json:"broadcaster_user_id,omitempty"`
+	BroadcasterUserId   string `json:"broadcaster_user_id,omitempty"`
+	ToBroadcasterUserId string `json:"to_broadcaster_user_id,omitempty"`
+	ModeratorUserId     string `json:"moderator_user_id,omitempty"`
 }
 
 type twitchSubscriptionTransport struct {
@@ -305,6 +330,43 @@ type CreateRewardRequest struct {
 	MaxPerUserPerStream          int  `json:"max_per_user_per_stream,omitempty"`
 	IsGlobalCooldownEnabled      bool `json:"is_global_cooldown_enabled"`
 	GlobalCooldownSeconds        int  `json:"global_cooldown_seconds,omitempty"`
+}
+
+type StreamInfo struct {
+	ID           int64     `json:"id,string"`
+	UserID       int64     `json:"user_id,string"`
+	UserLogin    string    `json:"user_login"`
+	UserName     string    `json:"user_name"`
+	GameID       string    `json:"game_id,omitempty"`
+	GameName     string    `json:"game_name"`
+	Type         string    `json:"type"`
+	Title        string    `json:"title"`
+	ViewerCount  int       `json:"viewer_count"`
+	StartedAt    time.Time `json:"started_at"`
+	Language     string    `json:"language"`
+	ThumbnailUrl string    `json:"thumbnail_url"`
+	//TagIDs []int
+	Tags     []string `json:"tags"`
+	IsMature bool     `json:"is_mature"`
+}
+
+type StreamsInfo struct {
+	Data       []StreamInfo `json:"data"`
+	Pagination struct {
+		Cursor string `json:"cursor"`
+	} `json:"pagination"`
+}
+
+type Raider struct {
+	ID    int64
+	Login string
+	Name  string
+}
+
+type Raid struct {
+	Raider  Raider
+	Viewers int
+	Stream  StreamInfo
 }
 
 type Reward struct {
@@ -360,6 +422,17 @@ type Redemption struct {
 	} `json:"reward"`
 }
 
+type RaidEvent struct {
+	ID                       string `json:"id"`
+	FromBroadcasterUserID    int64  `json:"from_broadcaster_user_id,string"`
+	FromBroadcasterUserLogin string `json:"from_broadcaster_user_login"`
+	FromBroadcasterUserName  string `json:"from_broadcaster_user_name"`
+	ToBroadcasterUserID      int64  `json:"to_broadcaster_user_id,string"`
+	ToBroadcasterUserLogin   string `json:"to_broadcaster_user_login"`
+	ToBroadcasterUserName    string `json:"to_broadcaster_user_name"`
+	Viewers                  int    `json:"viewers"`
+}
+
 func (r Reward) Key() string {
 	if r.Title == "" {
 		return strconv.Itoa(r.Cost)
@@ -403,7 +476,7 @@ func (c *TwitchClient) Prepare(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.BroadcasterID = v.UserID
+	c.UserID = v.UserID
 	c.ExpiresAt = time.Now().Add(time.Second * time.Duration(v.ExpiresIn))
 	c.Login = v.Login
 
@@ -435,6 +508,19 @@ func (c *TwitchClient) LoadRewards(ctx context.Context) error {
 		r.tw = c
 	}
 	return nil
+}
+
+func (c *TwitchClient) Shoutout(ctx context.Context, from_user_id, to_user_id int64) error {
+	return c.apiCall(
+		ctx,
+		"https://api.twitch.tv/helix/chat/shoutouts",
+		map[string]any{
+			"from_broadcaster_id": fmt.Sprintf("%d", from_user_id),
+			"to_broadcaster_id":   fmt.Sprintf("%d", to_user_id),
+			"moderator_id":        fmt.Sprintf("%d", c.UserID),
+		},
+		nil,
+	)
 }
 
 func (r Reward) ToCreateRequest() CreateRewardRequest {
@@ -495,7 +581,7 @@ func (r *Reward) Save(ctx context.Context) error {
 	err = r.tw.apiCall(
 		ctx,
 		u.String(),
-		map[string]interface{}{
+		map[string]any{
 			"_method":  "PATCH",
 			"_payload": reward_req,
 		},
@@ -513,7 +599,7 @@ func (c *TwitchClient) DeleteReward(ctx context.Context, reward Reward) error {
 	err := c.apiCall(
 		ctx,
 		"https://api.twitch.tv/helix/channel_points/custom_rewards",
-		map[string]interface{}{
+		map[string]any{
 			"_method": "DELETE",
 			"id":      reward.ID,
 		},
@@ -540,7 +626,7 @@ func (r *Reward) GetRedemptions(ctx context.Context) ([]*Redemption, error) {
 	err := r.tw.apiCall(
 		ctx,
 		"https://api.twitch.tv/helix/channel_points/custom_rewards/redemptions",
-		map[string]interface{}{
+		map[string]any{
 			"_method":   "GET",
 			"reward_id": r.ID,
 			"status":    "UNFULFILLED",
@@ -579,7 +665,7 @@ func (r *Reward) SetRedemptionStatus(ctx context.Context, redemption_id, new_sta
 	err = r.tw.apiCall(
 		ctx,
 		u.String(),
-		map[string]interface{}{
+		map[string]any{
 			"_method": "PATCH",
 			"status":  new_status,
 		},
@@ -614,24 +700,65 @@ func (c *TwitchClient) Subscribe(ctx context.Context, session_id string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	s := twitchEventSubscription{
-		Condition: twitchSubscriptionCondition{
-			BroadcasterUserId: fmt.Sprintf("%d", c.BroadcasterID),
+	subscriptions := []twitchEventSubscription{
+		{
+			Condition: twitchSubscriptionCondition{
+				BroadcasterUserId: fmt.Sprintf("%d", c.UserID),
+			},
+			Transport: twitchSubscriptionTransport{
+				Method:    "websocket",
+				SessionId: session_id,
+			},
+			Type:    "channel.channel_points_custom_reward_redemption.add",
+			Version: "1",
 		},
-		Transport: twitchSubscriptionTransport{
-			Method:    "websocket",
-			SessionId: session_id,
+		{
+			Condition: twitchSubscriptionCondition{
+				ToBroadcasterUserId: fmt.Sprintf("%d", c.UserID),
+			},
+			Transport: twitchSubscriptionTransport{
+				Method:    "websocket",
+				SessionId: session_id,
+			},
+			Type:    "channel.raid",
+			Version: "1",
 		},
-		Type:    "channel.channel_points_custom_reward_redemption.add",
-		Version: "1",
+	}
+	for _, scope := range c.Scopes {
+		if strings.HasSuffix(scope, "moderator:read:followers") {
+			subscriptions = append(
+				subscriptions,
+				twitchEventSubscription{
+					Condition: twitchSubscriptionCondition{
+						BroadcasterUserId: fmt.Sprintf("%d", c.UserID),
+						ModeratorUserId:   fmt.Sprintf("%d", c.UserID),
+					},
+					Transport: twitchSubscriptionTransport{
+						Method:    "websocket",
+						SessionId: session_id,
+					},
+					Type:    "channel.follow",
+					Version: "2",
+				},
+			)
+			break
+		}
 	}
 
-	return c.apiCall(
-		ctx,
-		"https://api.twitch.tv/helix/eventsub/subscriptions",
-		s,
-		nil,
-	)
+	for _, s := range subscriptions {
+		err := c.apiCall(
+			ctx,
+			"https://api.twitch.tv/helix/eventsub/subscriptions",
+			s,
+			nil,
+		)
+		if err != nil {
+			return fmt.Errorf("Twitch: cannot subscribe to %s: %w", s.Type, err)
+		}
+		log.Printf("Twitch: subscribed to %s", s.Type)
+	}
+
+	return nil
 }
 
 // vim: ai:ts=8:sw=8:noet:syntax=go

@@ -1,7 +1,7 @@
 <div class="tab-pane fade{{ if eq .Tab "twitch" }} show active{{ end }}" id="nav-twitch" role="tabpanel" aria-labelledby="nav-twitch-tab">
-  {{ if .Twitch.BroadcasterID }}
-    Hello, Broadcaster {{ .Twitch.BroadcasterID }} ( {{ .Twitch.Login }} ).<br />
-    Token expires at {{ .Twitch.ExpiresAt }}
+  {{ if .Twitch.UserID }}
+    Hello, Broadcaster {{ .Twitch.UserID }} ( {{ .Twitch.Login }} ).<br />
+    Token expires at {{ .Twitch.ExpiresAt }}, <span class="{{ if less ((.Twitch.ExpiresAt.Sub now).Hours) 96}}expiring{{ end }}"> that would be in {{ .Twitch.ExpiresAt.Sub now }}</span>.
     <form action="/disconnect" method="POST">
       <input type="submit" value="reset" />
       <input type="hidden" name="csrf" value="{{ .CSRF }}" />
@@ -17,9 +17,9 @@
     </form>
   {{ end }}
 
-  {{ if .TwitchBot.BroadcasterID }}
-    Hello, Bot {{ .TwitchBot.BroadcasterID }} ( {{ .TwitchBot.Login }} ). <br />
-    Token expires at {{ .Twitch.ExpiresAt }}
+  {{ if .TwitchBot.UserID }}
+    Hello, Bot {{ .TwitchBot.UserID }} ( {{ .TwitchBot.Login }} ). <br />
+    Token expires at {{ .TwitchBot.ExpiresAt }}, <span class="{{ if less ((.TwitchBot.ExpiresAt.Sub now).Hours) 96}}expiring{{ end }}"> that would be in {{ .TwitchBot.ExpiresAt.Sub now }}</span>.
     <form action="/disconnect" method="POST">
       <input type="submit" value="reset" />
       <input type="hidden" name="csrf" value="{{ .CSRF }}" />
@@ -35,7 +35,7 @@
     </form>
   {{ end }}
 
-  {{ if .Twitch.BroadcasterID }}
+  {{ if .Twitch.UserID }}
     <h3>Rewards</h3>
     <div class="container mt=5" id="rewards_table">
       {{ range .Twitch.GetRewards }}

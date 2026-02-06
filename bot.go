@@ -130,7 +130,7 @@ func (b *Bot) handleIRCConn() {
 	}
 }
 
-func (b *Bot) Reply(format string, rest ...interface{}) {
+func (b *Bot) Reply(format string, rest ...any) {
 	irc_client := b.ircClient
 	yt_client := b.yt_bot
 
@@ -169,21 +169,33 @@ func (b *Bot) ProcessMessage(ctx context.Context, from, msg string) error {
 		b.Balances[from] = 5
 	}
 
-	log.Printf("%s: %s", from, msg)
+	if new_prefix, ok := ctx.Value("prefix").(string); !ok || new_prefix == "" {
+		log.Printf("%s: %s", from, msg)
+	}
 
 	if strings.HasPrefix(flds[0], "!") {
-		cmd := flds[0][1:]
-		if strings.HasPrefix(flds[0], "!!") {
-			cmd = flds[0][2:]
+		prefix := "cmd_"
+		if new_prefix, ok := ctx.Value("prefix").(string); ok && new_prefix != "" {
+			prefix = new_prefix
 		}
-		_, err := b.e.Get("cmd_" + cmd)
+		cmd := flds[0][1:]
+		if strings.HasPrefix(strings.TrimSpace(msg), "!!") {
+			prefix = "cmd" // NOTE: no trailing underscore
+			cmd = "bangbang"
+		}
+		_, err := b.e.Get(prefix + cmd)
 		if err != nil {
-			return fmt.Errorf("Unrecognized command: %q: %s", cmd, err)
+			if prefix == "cmd_" {
+				return fmt.Errorf("Unrecognized command: %q: %s", cmd, err)
+			} else {
+				return nil
+			}
 		}
 
+		// TODO: assign a prefix for Twitch rewards
+		is_reward := ctx.Value("is_reward")
 		if b.TwitchFilter {
 			if b.RewardSet[cmd] {
-				is_reward := ctx.Value("is_reward")
 				if is_reward != true {
 					return fmt.Errorf("%q can only be called from Twitch rewards", cmd)
 				}
@@ -191,20 +203,24 @@ func (b *Bot) ProcessMessage(ctx context.Context, from, msg string) error {
 		}
 
 		args := make([]string, 0, len(flds)-1)
-		if strings.HasPrefix(flds[0], "!!") {
-			args = append(args, fmt.Sprintf("%q", strings.TrimSpace(msg[len(flds[0]):])))
+		if is_reward == true {
+			if len(flds) > 1 {
+				args = append(args, fmt.Sprintf("%q", strings.Join(flds[1:], " ")))
+			}
+		} else if prefix == "cmd" && cmd == "bangbang" {
+			args = append(args, fmt.Sprintf("%q", strings.TrimPrefix(strings.TrimSpace(msg), "!!")))
 		} else {
 			for _, arg := range flds[1:] {
 				args = append(args, fmt.Sprintf("%q", arg))
 			}
 		}
 
-		script := fmt.Sprintf("cmd_%s(%s)", cmd, strings.Join(args, ", "))
+		script := fmt.Sprintf("%s%s(%s)", prefix, cmd, strings.Join(args, ", "))
 		e := b.e.DeepCopy()
 		ctx := context.WithValue(ctx, "from_user", from)
 
 		go func(ctx context.Context, e *env.Env) {
-			b.e.Set("eval", func(code string) interface{} {
+			b.e.Set("eval", func(code string) any {
 				result, err := vm.ExecuteContext(ctx, e, nil, code)
 				if err != nil {
 					log.Printf("error while executing %q: %s", code, err)
@@ -233,14 +249,23 @@ func (b *Bot) Handle(c *irc.Client, m *irc.Message) {
 
 	if m.Command == "001" {
 		// 001 is a welcome event, so we join channels there
+		c.Write("CAP REQ twitch.tv/tags")
 		c.Write("JOIN #" + ch)
 	} else if m.Command == "JOIN" && c.FromChannel(m) {
 		if strings.ToLower(m.Prefix.User) != strings.ToLower(c.CurrentNick()) {
-			err = b.ProcessMessage(context.Background(), m.Prefix.User, "!event_join")
+			err = b.ProcessMessage(
+				context.WithValue(context.Background(), "prefix", "event_"),
+				m.Prefix.User,
+				"!join",
+			)
 		}
 	} else if m.Command == "PART" && c.FromChannel(m) {
 		if strings.ToLower(m.Prefix.User) != strings.ToLower(c.CurrentNick()) {
-			err = b.ProcessMessage(context.Background(), m.Prefix.User, "!event_part")
+			err = b.ProcessMessage(
+				context.WithValue(context.Background(), "prefix", "event_"),
+				m.Prefix.User,
+				"!part",
+			)
 		}
 	} else if m.Command == "PRIVMSG" && c.FromChannel(m) {
 		msg := m.Trailing()
@@ -254,9 +279,15 @@ func (b *Bot) Handle(c *irc.Client, m *irc.Message) {
 			from = display_name
 		}
 		if msgid, _ := m.GetTag("msg-id"); msgid == "highlighted-message" {
-			msg = "!!event_highlighted " + msg
+			msg = "!highlighted " + msg
+			err = b.ProcessMessage(context.WithValue(
+				context.Background(),
+				"prefix",
+				"event_",
+			), from, msg)
+		} else {
+			err = b.ProcessMessage(context.Background(), from, msg)
 		}
-		err = b.ProcessMessage(context.Background(), from, msg)
 	}
 	if err != nil {
 		log.Println(err)
@@ -302,6 +333,9 @@ func from() {
 func is_reward() {
 	return false
 }
+func raid() {
+	return new(Raid)
+}
 	`)
 	if err != nil {
 		return err
@@ -322,6 +356,11 @@ func is_reward() {
 		from := ctx.Value("from_user")
 		_, err := orig_from.(func(context.Context) (reflect.Value, reflect.Value))(ctx)
 		return reflect.ValueOf(from), err
+	}))
+	errors = append(errors, b.e.Set("raid", func(ctx context.Context) (reflect.Value, reflect.Value) {
+		raid := ctx.Value("raid")
+		_, err := orig_from.(func(context.Context) (reflect.Value, reflect.Value))(ctx)
+		return reflect.ValueOf(raid), err
 	}))
 	errors = append(errors, b.e.Define("add_command", func(commands ...*Command) {
 		if !loading {
@@ -346,7 +385,7 @@ func is_reward() {
 		defer cancel()
 		m := map[string]*Reward{}
 
-		if b.tw_broadcaster == nil || b.tw_broadcaster.BroadcasterID == 0 {
+		if b.tw_broadcaster == nil || b.tw_broadcaster.UserID == 0 {
 			log.Println("broadcaster token is not set")
 			return
 		}
@@ -398,7 +437,7 @@ func is_reward() {
 			return
 		}
 		buf := &bytes.Buffer{}
-		err = tmpl.Execute(buf, map[string]interface{}{
+		err = tmpl.Execute(buf, map[string]any{
 			"From":  from,
 			"Actor": actor,
 		})
@@ -506,14 +545,57 @@ func is_reward() {
 			return
 		}
 		buf := &bytes.Buffer{}
-		err = tmpl.Execute(buf, map[string]interface{}{
+		err = tmpl.Execute(buf, map[string]any{
 			"From":  from,
 			"Actor": actor,
 		})
 		b.Reply("%s", buf.String())
 		b.LastBuckets["reply"] = time.Now().Add(time.Second)
 	}))
-	errors = append(errors, b.e.Define("reply", func(format string, args ...interface{}) {
+	errors = append(errors, b.e.Define("granum", func(n int, forms ...string) string {
+		switch len(forms) {
+		case 1:
+			return fmt.Sprintf("%d %s", n, forms[0])
+		case 2:
+			if n == 1 {
+				return fmt.Sprintf("%d %s", n, forms[0])
+			} else {
+				return fmt.Sprintf("%d %s", n, forms[1])
+			}
+		case 3:
+			if (n%100)/10 == 1 {
+				return fmt.Sprintf("%d %s", n, forms[2])
+			} else if n%10 == 1 {
+				return fmt.Sprintf("%d %s", n, forms[0])
+			} else if n%10 < 5 {
+				return fmt.Sprintf("%d %s", n, forms[1])
+			} else {
+				return fmt.Sprintf("%d %s", n, forms[2])
+			}
+		default:
+			return fmt.Sprintf("%d", n)
+		}
+	}))
+	errors = append(errors, b.e.Define("shoutout", func(to_id int64) {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+
+		if b.tw_broadcaster == nil || b.tw_broadcaster.UserID == 0 {
+			log.Println("broadcaster token is not set")
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(
+			context.Background(),
+			time.Second*10,
+		)
+		defer cancel()
+		err := b.tw_bot.Shoutout(ctx, b.tw_broadcaster.UserID, to_id)
+		if err != nil {
+			log.Printf("cannot send shoutout: %s", err)
+		}
+	}))
+	errors = append(errors, b.e.Define("reply", func(format string, args ...any) {
 		b.mu.Lock()
 		defer b.mu.Unlock()
 
@@ -554,7 +636,7 @@ func is_reward() {
 			return false
 		}
 	}))
-	errors = append(errors, b.e.Define("sleep", func(duration interface{}) {
+	errors = append(errors, b.e.Define("sleep", func(duration any) {
 		i, ok := duration.(int64)
 		if ok {
 			time.Sleep(time.Duration(i) * time.Second)
@@ -586,7 +668,7 @@ func is_reward() {
 		return f
 	}))
 	errors = append(errors, b.e.Define("join", strings.Join))
-	errors = append(errors, b.e.Define("rcon", func(format string, args ...interface{}) bool {
+	errors = append(errors, b.e.Define("rcon", func(format string, args ...any) bool {
 		b.mu.Lock()
 		defer b.mu.Unlock()
 
@@ -602,7 +684,7 @@ func is_reward() {
 
 		return true
 	}))
-	errors = append(errors, b.e.Define("debug", func(format string, args ...interface{}) {
+	errors = append(errors, b.e.Define("debug", func(format string, args ...any) {
 		log.Printf("[DEBUG] "+format, args...)
 	}))
 	errors = append(errors, b.e.Define("rand", func() float64 {
@@ -618,13 +700,13 @@ func is_reward() {
 		}
 		return table
 	}))
-	errors = append(errors, b.e.Define("roll", func(args ...interface{}) interface{} {
+	errors = append(errors, b.e.Define("roll", func(args ...any) any {
 		if len(args) == 0 {
 			return "invalid_args"
 		}
 
 		ps := []float64{}
-		vs := []interface{}{}
+		vs := []any{}
 		var m, sum, offset float64
 		for i := 0; i < len(args)-1; i += 2 {
 			flt, ok := args[i].(float64)

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/contrib/renders/multitemplate"
 	"github.com/gin-gonic/gin"
@@ -422,6 +423,41 @@ func (c Config) InitAssetsTemplates(r *gin.Engine) error {
 		},
 		"add":  func(a, b int) int { return a + b },
 		"succ": func(n int) int { return n + 1 },
+		"now":  func() time.Time { return time.Now() },
+		"less": func(a, b any) bool {
+			var fa, fb float64
+			switch a := a.(type) {
+			case int:
+				fa = float64(a)
+			case int32:
+				fa = float64(a)
+			case int64:
+				fa = float64(a)
+			case float32:
+				fa = float64(a)
+			case float64:
+				fa = a
+			default:
+				return false
+			}
+
+			switch b := b.(type) {
+			case int:
+				fb = float64(b)
+			case int32:
+				fb = float64(b)
+			case int64:
+				fb = float64(b)
+			case float32:
+				fb = float64(b)
+			case float64:
+				fb = b
+			default:
+				return false
+			}
+
+			return fa < fb
+		},
 	}
 
 	render := multitemplate.New()

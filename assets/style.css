@@ -11,3 +11,4 @@ thead th { background:#f3f4f6; user-select:none; }
 .tr-drag-over { outline:2px dashed #60a5fa; }
 td[contenteditable="true"] { background:#fffbe6; }
 .remove-row button { background:transparent; border:none; cursor:pointer; }
+.expiring { background-color:#faa; color:000; }

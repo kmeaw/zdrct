@@ -31,7 +31,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -62,18 +61,8 @@ func NewRemote(bot *Bot) *Remote {
 		},
 	}
 
-	found := false
-	for _, scope := range bot.tw_broadcaster.Scopes {
-		if strings.HasSuffix(scope, ":redemptions") {
-			go r.connect()
-			go r.watchRewards()
-			found = true
-			break
-		}
-	}
-	if !found {
-		log.Println("channel points are disabled, check your config")
-	}
+	go r.connect()
+	go r.watch()
 
 	return r
 }
@@ -184,7 +173,7 @@ func (r *Remote) readLoop() error {
 	}
 }
 
-func (r *Remote) watchRewards() {
+func (r *Remote) watch() {
 	t := time.NewTicker(time.Second * 1)
 	defer t.Stop()
 	for {
@@ -258,26 +247,26 @@ type EventSubBase struct {
 
 type EventSubUnknown struct {
 	EventSubBase
-	Payload map[string]interface{} `json:"payload"`
+	Payload map[string]any `json:"payload"`
 }
 
 type EventSubNotification struct {
 	EventSubBase
 	Payload struct {
 		Subscription struct {
-			ID        string                 `json:"id"`
-			Status    string                 `json:"status"`
-			Type      string                 `json:"type"`
-			Version   string                 `json:"version"`
-			Cost      int                    `json:"cost"`
-			Condition map[string]interface{} `json:"condition"`
+			ID        string         `json:"id"`
+			Status    string         `json:"status"`
+			Type      string         `json:"type"`
+			Version   string         `json:"version"`
+			Cost      int            `json:"cost"`
+			Condition map[string]any `json:"condition"`
 			Transport struct {
 				Method    string `json:"method"`
 				SessionID string `json:"session_id"`
 			} `json:"transport"`
 			CreatedAt time.Time `json:"created_at"`
 		} `json:"subscription"`
-		Event map[string]interface{} `json:"event"`
+		Event map[string]any `json:"event"`
 	} `json:"payload"`
 }
 
@@ -303,6 +292,131 @@ type EventSubWelcome struct {
 			ReconnectURL            string    `json:"reconnect_url"`
 		} `json:"session"`
 	} `json:"payload"`
+}
+
+func (r *Remote) processNotification(bot *Bot, event EventSubUnknown, bmsg []byte) error {
+	notification_event := EventSubNotification{}
+	err := json.Unmarshal(bmsg, &notification_event)
+	if err != nil {
+		return err
+	}
+
+	if bot == nil {
+		log.Printf("bot is inactive")
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		time.Second*15,
+	)
+	defer cancel()
+
+	bpayload, _ := json.Marshal(notification_event.Payload.Event)
+
+	switch event.Metadata.SubscriptionType {
+	case "channel.raid":
+		raid_event := &RaidEvent{}
+		err = json.Unmarshal(bpayload, &raid_event)
+		if err != nil {
+			return fmt.Errorf("eventsub: cannot extract raid event payload from %q: %w", bpayload, err)
+		}
+
+		si, err := r.Broadcaster.GetStreamInfo(ctx, raid_event.FromBroadcasterUserID)
+		if err != nil {
+			log.Printf(
+				"eventsub: cannot get stream info for %q: %s",
+				raid_event.FromBroadcasterUserLogin,
+				err,
+			)
+			return nil
+		}
+
+		raid := &Raid{
+			Raider: Raider{
+				ID:    raid_event.FromBroadcasterUserID,
+				Login: raid_event.FromBroadcasterUserLogin,
+				Name:  raid_event.FromBroadcasterUserName,
+			},
+			Viewers: raid_event.Viewers,
+			Stream:  *si,
+		}
+
+		err = bot.ProcessMessage(
+			context.WithValue(
+				context.WithValue(context.Background(), "raid", raid),
+				"prefix", "event_",
+			),
+			raid_event.FromBroadcasterUserLogin,
+			"!raid",
+		)
+		if err != nil {
+			log.Printf("cannot emit raid event: %s", err)
+		}
+
+	case "channel.channel_points_custom_reward_redemption.add":
+		r.mu.Lock()
+		m := bot.GetRewardsMap()
+		r.mu.Unlock()
+
+		redemption := &Redemption{}
+		err = json.Unmarshal(bpayload, &redemption)
+		if err != nil {
+			return fmt.Errorf("eventsub: cannot extract redemption payload from %q: %w", bpayload, err)
+		}
+
+		reward := &Reward{
+			RewardCore: RewardCore{
+				ID:     redemption.RewardInfo.ID,
+				Title:  redemption.RewardInfo.Title,
+				Prompt: redemption.RewardInfo.Prompt,
+				Cost:   redemption.RewardInfo.Cost,
+			},
+		}
+
+		r.mu.Lock()
+		reward.SetClient(r.Broadcaster)
+		r.mu.Unlock()
+
+		cmd, ok := m[redemption.RewardInfo.ID]
+		if ok {
+			log.Printf(
+				"User %s has redeemed a reward %q: %q",
+				redemption.UserLogin,
+				redemption.RewardInfo.Title,
+				cmd.Cmd,
+			)
+			payload := "!" + cmd.Cmd
+			if redemption.UserInput != "" {
+				payload = payload + " " + redemption.UserInput
+			}
+			err := bot.ProcessMessage(
+				context.WithValue(context.Background(), "is_reward", true),
+				redemption.UserLogin,
+				payload,
+			)
+			if err != nil {
+				log.Println(err)
+				reward.SetRedemptionStatus(ctx, redemption.ID, "CANCELED")
+			} else {
+				err = reward.SetRedemptionStatus(ctx, redemption.ID, "FULFILLED")
+			}
+		} else {
+			log.Printf(
+				"User %s redeems a reward %q: command is not mapped",
+				redemption.UserLogin,
+				reward.ID,
+			)
+
+			err = reward.SetRedemptionStatus(ctx, redemption.ID, "CANCELED")
+		}
+		if err != nil {
+			log.Printf("cannot change redemption status: %s", err)
+		}
+	default:
+		log.Printf("eventsub: unexpected message: %s", bmsg)
+	}
+	return nil
 }
 
 func (r *Remote) readEventSub() error {
@@ -356,87 +470,13 @@ func (r *Remote) readEventSub() error {
 				return err
 			}
 
-			log.Printf("session %s has been subscribed to rewards", welcome_event.Payload.Session.ID)
-
 		case "session_reconnect":
 			return nil
 
 		case "notification":
-			if event.Metadata.SubscriptionType != "channel.channel_points_custom_reward_redemption.add" {
-				log.Printf("eventsub: unexpected message: %s", bmsg)
-				continue
-			}
-
-			notification_event := EventSubNotification{}
-			err = json.Unmarshal(bmsg, &notification_event)
+			err = r.processNotification(bot, event, bmsg)
 			if err != nil {
 				return err
-			}
-
-			if bot == nil {
-				log.Printf("bot is inactive")
-				continue
-			}
-
-			r.mu.Lock()
-			m := bot.GetRewardsMap()
-			r.mu.Unlock()
-
-			ctx, cancel := context.WithTimeout(
-				context.Background(),
-				time.Second*15,
-			)
-			defer cancel()
-
-			redemption := &Redemption{}
-			bpayload, _ := json.Marshal(notification_event.Payload.Event)
-			err = json.Unmarshal(bpayload, &redemption)
-			if err != nil {
-				return fmt.Errorf("eventsub: cannot extract redemption payload from %q: %w", bpayload, err)
-			}
-
-			reward := &Reward{
-				RewardCore: RewardCore{
-					ID:     redemption.RewardInfo.ID,
-					Title:  redemption.RewardInfo.Title,
-					Prompt: redemption.RewardInfo.Prompt,
-					Cost:   redemption.RewardInfo.Cost,
-				},
-			}
-
-			r.mu.Lock()
-			reward.SetClient(r.Broadcaster)
-			r.mu.Unlock()
-
-			cmd, ok := m[redemption.RewardInfo.ID]
-			if ok {
-				log.Printf(
-					"User %s has redeemed a reward %q: %q",
-					redemption.UserLogin,
-					redemption.RewardInfo.Title,
-					cmd.Cmd,
-				)
-				err := bot.ProcessMessage(
-					context.WithValue(context.Background(), "is_reward", true),
-					redemption.UserLogin,
-					"!"+cmd.Cmd,
-				)
-				if err != nil {
-					log.Println(err)
-				} else {
-					err = reward.SetRedemptionStatus(ctx, redemption.ID, "FULFILLED")
-				}
-			} else {
-				log.Printf(
-					"User %s redeems a reward %q: command is not mapped",
-					redemption.UserLogin,
-					reward.ID,
-				)
-
-				err = reward.SetRedemptionStatus(ctx, redemption.ID, "CANCELED")
-			}
-			if err != nil {
-				log.Printf("cannot change redemption status: %s", err)
 			}
 		}
 	}
@@ -564,8 +604,8 @@ func (r *Remote) sendConfig() error {
 	}
 
 	enc := json.NewEncoder(r.conn)
-	return enc.Encode(map[string]interface{}{
-		"config": map[string]interface{}{
+	return enc.Encode(map[string]any{
+		"config": map[string]any{
 			"buttons": uploaded_buttons,
 		},
 	})

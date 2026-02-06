@@ -17,11 +17,17 @@ zdrct communicates both with Twitch and ZDoom. When an event occurs in Twitch, i
 
 There are three types of events - chat-commands (someone sends a message prefixed with '!'), buttons (so you can have them if you still don't have a Twitch Affilate status) and channel custom reward redemptions (someone spends channel points).
 
-The script is written by the user in [Anko](https://github.com/mattn/anko/tree/master/_example/scripts) language. Chat-commands are represented by cmd_xxxx functions, which are called by zdrct when someone writes !xxxx in the chat. Viewers can supply arguments to these functions: "!hello world 1234" would call cmd_hello("world", "1234").
+The script is written by the user in [Anko](https://github.com/mattn/anko/tree/master/_example/scripts) language. Chat-commands are represented by cmd_xxxx functions, which are called by zdrct when someone writes !xxxx in the chat. Viewers can supply arguments to these functions: "!hello world 1234" would call cmd_hello("world", "1234"). "!!hello world" is a special form that would call cmdbangbang("hello world").
+
+Certain events would call functions with event_ prefix, such as event_join, event_part, event_raid and event_highlighted.
 
 The script can inteface ZDoom using the function "rcon".
 
 To use the alert system you need to display the web page http://localhost:8666/alerts over your stream (OBS has a built-in browser for a such purpose).
+
+# Release notes
+
+Make sure to reset your "broadcaster_scopes" in the config when updating to v0.6.2.
 
 # Quick start
 
@@ -135,6 +141,13 @@ Runs an external program.
 ### play(filename)
 Plays back audio from the specified file.
 
+### granum(n[, form1[, form2[, form3]]])
+Returns a grammatical number representation of number n. For English use something like
+`granum(123, "player", "players")`
+
+### raid()
+Returns current Twitch raid information. See the description of "Raid" type below.
+
 ## Data types
 
 ### int64
@@ -170,11 +183,37 @@ AlertSound - a sound for the alert
 Reply - a message to be sent by the bot
 
 ### Reward
-Twitch's custom reward. Hold [a handful of data fields](https://dev.twitch.tv/docs/api/reference#create-custom-rewards)
+Twitch's custom reward. Holds [a handful of data fields](https://dev.twitch.tv/docs/api/reference#create-custom-rewards)
 Most important ones:
 Title - the name of a custom reward (string);
 Cost - cost of the custom reward (a positive integer);
 IsEnabled - if the custom reward is enabled (boolean).
+
+### Raid
+Twitch's raid information.
+```
+{
+  "Raider": {
+    "ID": 1234,
+    "Login": "the_raider",
+    "Name": "The Raider"
+  },
+  "Viewers": 420,
+  "Stream": {
+    "GameName": "",
+    "Type": "live",
+    "Title": "My test stream",
+    "StartedAt": Time(Fri, 06 Feb 2026 23:22:12 +0000),
+    "Language": "en",
+    "ViewerCount": 690,
+    "Tags": [
+      "test",
+      "programming"
+    ],
+    "IsMature": true
+  }
+}
+```
 
 ## Special functions to manipulate buttons and rewards
 These functions are called once upon the script evaluation. They cannot be called by user events.

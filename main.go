@@ -684,7 +684,7 @@ func (z *ZDRCT) initAPI() error {
 			return
 		}
 
-		twitch_impl.BroadcasterID = 0
+		twitch_impl.UserID = 0
 		twitch_impl.Login = ""
 		twitch_impl.Token = ""
 
