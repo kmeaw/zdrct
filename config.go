@@ -36,6 +36,7 @@ type Config struct {
 	NoMappedRewardCommands bool   `json:"no_mapped_reward_commands"`
 	SoundVolume            int    `json:"sound_volume,omitempty"`
 	StaticCSRF             string `json:"static_csrf,omitempty"`
+	SocksProxy             string `json:"socks_proxy,omitempty"`
 
 	zdrctConfigDir string
 }

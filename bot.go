@@ -836,10 +836,41 @@ func (b *Bot) startIRC() {
 
 		log.Println("connecting to Twitch IRC...")
 
-		ircConn, err := tls.Dial("tcp", "irc.chat.twitch.tv:6697", nil)
-		if err != nil {
-			log.Printf("Error dialing Twitch IRC endpoint: %s", err)
-			continue
+		b.mu.Lock()
+		socksProxy := b.tw_bot.SocksProxy
+		b.mu.Unlock()
+
+		var ircConn net.Conn
+		var err error
+		if socksProxy != "" {
+			dialer, err := newSOCKS5Dialer(socksProxy, 10*time.Second)
+			if err != nil {
+				log.Printf("Error creating SOCKS5 dialer: %s", err)
+				continue
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			conn, err := dialWithProxyContext(ctx, dialer, "tcp", "irc.chat.twitch.tv:6697")
+			cancel()
+			if err != nil {
+				log.Printf("Error dialing Twitch IRC through proxy: %s", err)
+				continue
+			}
+			tlsConn := tls.Client(conn, &tls.Config{ServerName: "irc.chat.twitch.tv"})
+			tlsConn.SetDeadline(time.Now().Add(10 * time.Second))
+			if err := tlsConn.Handshake(); err != nil {
+				conn.Close()
+				log.Printf("Error negotiating Twitch IRC TLS through proxy: %s", err)
+				continue
+			}
+			tlsConn.SetDeadline(time.Time{})
+			ircConn = tlsConn
+		} else {
+			dialer := &net.Dialer{Timeout: 10 * time.Second}
+			ircConn, err = tls.DialWithDialer(dialer, "tcp", "irc.chat.twitch.tv:6697", nil)
+			if err != nil {
+				log.Printf("Error dialing Twitch IRC endpoint: %s", err)
+				continue
+			}
 		}
 
 		ircClient := irc.NewClient(ircConn, irc.ClientConfig{
@@ -855,6 +886,16 @@ func (b *Bot) startIRC() {
 		b.ircClient = ircClient
 		b.mu.Unlock()
 		b.handleIRCConn()
+	}
+}
+
+func (b *Bot) ReconnectIRC() {
+	b.mu.Lock()
+	ircConn := b.ircConn
+	b.mu.Unlock()
+
+	if ircConn != nil {
+		ircConn.Close()
 	}
 }
 

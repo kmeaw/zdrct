@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -32,12 +33,13 @@ import (
 	"time"
 
 	"golang.org/x/net/context/ctxhttp"
+	"golang.org/x/net/proxy"
 )
 
 const HELIX_REWARDS = "https://api.twitch.tv/helix/channel_points/custom_rewards"
 const APP_ID = "ehx3943o3ttw0nplenassv0pme8yvb"
 const DEFAULT_APP_SCOPES = "chat:read,chat:edit,channel:read:redemptions,channel:manage:redemptions,moderator:read:followers"
-const DEFAULT_BOT_SCOPES = "chat:read,chat:edit,moderator:manage:shoutouts"
+const DEFAULT_BOT_SCOPES = "chat:read,chat:edit,moderator:manage:shoutouts,channel:bot"
 
 var ErrNoRewards = fmt.Errorf("no rewards")
 
@@ -50,26 +52,91 @@ type TwitchClient struct {
 	Purpose     string
 	Rewards     []*Reward
 	rewardCache map[string]*Reward
+	SocksProxy  string
 
 	h  *http.Client
 	mu *sync.Mutex
 }
 
 type TwitchClientOpts struct {
-	Scopes  string
-	Purpose string
+	Scopes     string
+	Purpose    string
+	SocksProxy string
+}
+
+func newSOCKS5Dialer(socksProxy string, timeout time.Duration) (proxy.Dialer, error) {
+	socksProxy = strings.TrimSpace(socksProxy)
+	forward := &net.Dialer{Timeout: timeout}
+	return proxy.SOCKS5("tcp", socksProxy, nil, forward)
+}
+
+func dialWithProxyContext(ctx context.Context, dialer proxy.Dialer, network, addr string) (net.Conn, error) {
+	if contextDialer, ok := dialer.(proxy.ContextDialer); ok {
+		return contextDialer.DialContext(ctx, network, addr)
+	}
+
+	type dialResult struct {
+		conn net.Conn
+		err  error
+	}
+	result := make(chan dialResult, 1)
+	go func() {
+		conn, err := dialer.Dial(network, addr)
+		if conn != nil && ctx.Err() != nil {
+			conn.Close()
+			return
+		}
+		result <- dialResult{conn: conn, err: err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case r := <-result:
+		return r.conn, r.err
+	}
+}
+
+func newHTTPClient(socksProxy string, timeout time.Duration) *http.Client {
+	socksProxy = strings.TrimSpace(socksProxy)
+	if socksProxy == "" {
+		return &http.Client{Timeout: timeout}
+	}
+
+	dialer, err := newSOCKS5Dialer(socksProxy, timeout)
+	if err != nil {
+		log.Printf("failed to create SOCKS5 dialer: %v", err)
+		return &http.Client{Timeout: timeout}
+	}
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return dialWithProxyContext(ctx, dialer, network, addr)
+	}
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+	}
 }
 
 func NewTwitchClient(opts TwitchClientOpts) *TwitchClient {
 	return &TwitchClient{
-		h: &http.Client{
-			Timeout: 10 * time.Second,
-		},
+		h:           newHTTPClient(opts.SocksProxy, 10*time.Second),
 		rewardCache: make(map[string]*Reward),
 		mu:          new(sync.Mutex),
 		Scopes:      strings.Split(opts.Scopes, ","),
 		Purpose:     opts.Purpose,
+		SocksProxy:  strings.TrimSpace(opts.SocksProxy),
 	}
+}
+
+func (c *TwitchClient) SetSocksProxy(socksProxy string) {
+	socksProxy = strings.TrimSpace(socksProxy)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.SocksProxy = socksProxy
+	c.h = newHTTPClient(socksProxy, 10*time.Second)
 }
 
 type APIError struct {

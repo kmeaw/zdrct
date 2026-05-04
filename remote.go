@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -48,13 +49,15 @@ type Remote struct {
 	conn             *websocket.Conn
 	connEventSub     *websocket.Conn
 	eventSubLocation *url.URL
+	SocksProxy       string
 	mu               sync.Mutex
 }
 
-func NewRemote(bot *Bot) *Remote {
+func NewRemote(bot *Bot, socksProxy string) *Remote {
 	r := &Remote{
 		Bot:        bot,
 		ImageCache: make(map[string]string),
+		SocksProxy: strings.TrimSpace(socksProxy),
 		eventSubLocation: &url.URL{
 			Scheme: "wss",
 			Host:   "eventsub.wss.twitch.tv",
@@ -69,6 +72,75 @@ func NewRemote(bot *Bot) *Remote {
 }
 
 var ErrNoConfig = errors.New("channel name or token are not set")
+
+func websocketAuthority(location *url.URL) string {
+	if location.Port() != "" {
+		return location.Host
+	}
+
+	switch location.Scheme {
+	case "ws":
+		return net.JoinHostPort(location.Hostname(), "80")
+	case "wss":
+		return net.JoinHostPort(location.Hostname(), "443")
+	default:
+		return location.Host
+	}
+}
+
+func dialWebsocketConfig(config *websocket.Config, socksProxy string, timeout time.Duration) (*websocket.Conn, error) {
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+
+	if socksProxy == "" {
+		config.Dialer = &net.Dialer{Timeout: timeout}
+		return websocket.DialConfig(config)
+	}
+
+	dialer, err := newSOCKS5Dialer(socksProxy, timeout)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	conn, err := dialWithProxyContext(ctx, dialer, "tcp", websocketAuthority(config.Location))
+	if err != nil {
+		return nil, err
+	}
+
+	if config.Location.Scheme == "wss" {
+		tlsConfig := config.TlsConfig
+		if tlsConfig == nil {
+			tlsConfig = &tls.Config{}
+		} else {
+			tlsConfig = tlsConfig.Clone()
+		}
+		if tlsConfig.ServerName == "" {
+			tlsConfig.ServerName = config.Location.Hostname()
+		}
+
+		tlsConn := tls.Client(conn, tlsConfig)
+		tlsConn.SetDeadline(time.Now().Add(timeout))
+		if err := tlsConn.Handshake(); err != nil {
+			conn.Close()
+			return nil, err
+		}
+		tlsConn.SetDeadline(time.Time{})
+		conn = tlsConn
+	}
+
+	conn.SetDeadline(time.Now().Add(timeout))
+	ws, err := websocket.NewClient(config, conn)
+	conn.SetDeadline(time.Time{})
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	return ws, nil
+}
 
 func (r *Remote) connectOnce() error {
 	var err error
@@ -213,7 +285,7 @@ func (r *Remote) connectEventSub() error {
 		return ErrNoConfig
 	}
 
-	r.connEventSub, err = websocket.DialConfig(&websocket.Config{
+	config := &websocket.Config{
 		Location: r.eventSubLocation,
 
 		Origin: &url.URL{
@@ -221,10 +293,9 @@ func (r *Remote) connectEventSub() error {
 			Host:   "twitch.tv",
 		},
 
-		Dialer: &net.Dialer{Timeout: 10 * time.Second},
-
 		Version: websocket.ProtocolVersionHybi13,
-	})
+	}
+	r.connEventSub, err = dialWebsocketConfig(config, r.SocksProxy, 10*time.Second)
 
 	if err != nil {
 		return err
@@ -525,6 +596,23 @@ func (r *Remote) SetBroadcaster(tw *TwitchClient) {
 	defer r.mu.Unlock()
 
 	r.Broadcaster = tw
+}
+
+func (r *Remote) SetSocksProxy(socksProxy string) {
+	socksProxy = strings.TrimSpace(socksProxy)
+
+	r.mu.Lock()
+	if r.SocksProxy == socksProxy {
+		r.mu.Unlock()
+		return
+	}
+	r.SocksProxy = socksProxy
+	connEventSub := r.connEventSub
+	r.mu.Unlock()
+
+	if connEventSub != nil {
+		connEventSub.Close()
+	}
 }
 
 func (r *Remote) sendConfig() error {

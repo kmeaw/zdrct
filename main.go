@@ -51,8 +51,9 @@ type ZDRCT struct {
 	alerter        *Alerter
 	config         *Config
 
-	engine *gin.Engine
-	csrf   string
+	engine   *gin.Engine
+	csrf     string
+	execPath string
 }
 
 func (z *ZDRCT) Init() error {
@@ -66,6 +67,12 @@ func (z *ZDRCT) Init() error {
 		}
 	}
 
+	var execErr error
+	z.execPath, execErr = os.Executable()
+	if execErr != nil {
+		log.Printf("cannot get executable path: %s", execErr)
+	}
+
 	z.config = &Config{}
 	err := z.config.Init()
 	if err != nil {
@@ -77,19 +84,23 @@ func (z *ZDRCT) Init() error {
 	}
 
 	z.tw_broadcaster = NewTwitchClient(TwitchClientOpts{
-		Scopes:  z.config.BroadcasterScopes,
-		Purpose: "broadcaster",
+		Scopes:     z.config.BroadcasterScopes,
+		Purpose:    "broadcaster",
+		SocksProxy: z.config.SocksProxy,
 	})
 	z.tw_bot = NewTwitchClient(TwitchClientOpts{
-		Scopes:  DEFAULT_BOT_SCOPES,
-		Purpose: "bot",
+		Scopes:     DEFAULT_BOT_SCOPES,
+		Purpose:    "bot",
+		SocksProxy: z.config.SocksProxy,
 	})
-	z.yt_bot = NewYoutubeClient()
+	z.yt_bot = NewYoutubeClient(YoutubeClientOpts{
+		SocksProxy: z.config.SocksProxy,
+	})
 	z.tw_bot.Scopes = strings.Split(DEFAULT_BOT_SCOPES, ",")
 	z.rcon = NewRconClient()
 	z.bot = NewBot(z.tw_broadcaster, z.tw_bot, z.yt_bot, z.config.zdrctConfigDir)
 	z.bot.RconClient = z.rcon
-	z.remote = NewRemote(z.bot)
+	z.remote = NewRemote(z.bot, z.config.SocksProxy)
 	z.alerter = NewAlerter()
 	z.bot.Alerter = z.alerter
 
@@ -563,7 +574,33 @@ func (z *ZDRCT) initAPI() error {
 			log.Printf("cannot save config: %s", err)
 		}
 
-		c.Redirect(http.StatusFound, twitch_impl.GetAuthLink("http://localhost:8666/oauth", p.CSRF))
+		authURL := twitch_impl.GetAuthLink("http://localhost:8666/oauth", p.CSRF)
+		var userDataDir string
+		if p.Purpose == "bot" && runtime.GOOS == "windows" {
+			userDataDir = filepath.Join(z.config.zdrctConfigDir, "webview_bot")
+		}
+		warning, err := openBrowser(authURL, z.config, z.execPath, userDataDir)
+		if err != nil {
+			log.Printf("cannot open Twitch OAuth browser: %s", err)
+			description := fmt.Sprintf("cannot open Twitch OAuth browser: %s\n\nOpen this URL manually: %s", err, authURL)
+			if warning != "" {
+				description = fmt.Sprintf("%s\n\nThe fallback browser also failed: %s\n\nOpen this URL manually: %s", warning, err, authURL)
+			}
+			c.HTML(http.StatusOK, "error.html", gin.H{
+				"Error": description,
+			})
+			return
+		}
+		if warning != "" {
+			log.Printf("Twitch OAuth browser warning: %s", warning)
+			c.HTML(http.StatusOK, "error.html", gin.H{
+				"Title": "Browser notice",
+				"Error": warning,
+			})
+			return
+		}
+
+		c.Redirect(http.StatusFound, "/?tab=twitch")
 	})
 
 	z.engine.POST("/youtube/live", func(c *gin.Context) {
@@ -648,7 +685,29 @@ func (z *ZDRCT) initAPI() error {
 			log.Printf("cannot save config: %s", err)
 		}
 
-		c.Redirect(http.StatusFound, z.yt_bot.GetAuthLink("http://localhost:8666/oauth", p.CSRF))
+		authURL := z.yt_bot.GetAuthLink("http://localhost:8666/oauth", p.CSRF)
+		warning, err := openBrowser(authURL, z.config, z.execPath, "")
+		if err != nil {
+			log.Printf("cannot open YouTube OAuth browser: %s", err)
+			description := fmt.Sprintf("cannot open YouTube OAuth browser: %s\n\nOpen this URL manually: %s", err, authURL)
+			if warning != "" {
+				description = fmt.Sprintf("%s\n\nThe fallback browser also failed: %s\n\nOpen this URL manually: %s", warning, err, authURL)
+			}
+			c.HTML(http.StatusOK, "error.html", gin.H{
+				"Error": description,
+			})
+			return
+		}
+		if warning != "" {
+			log.Printf("YouTube OAuth browser warning: %s", warning)
+			c.HTML(http.StatusOK, "error.html", gin.H{
+				"Title": "Browser notice",
+				"Error": warning,
+			})
+			return
+		}
+
+		c.Redirect(http.StatusFound, "/?tab=youtube")
 	})
 
 	z.engine.POST("/disconnect", func(c *gin.Context) {
@@ -690,6 +749,31 @@ func (z *ZDRCT) initAPI() error {
 
 		if err := z.config.Save(); err != nil {
 			log.Printf("cannot save config: %s", err)
+		}
+
+		c.Redirect(http.StatusFound, "/?tab=twitch")
+	})
+
+	z.engine.POST("/open/twitch", func(c *gin.Context) {
+		var p struct {
+			CSRF string `form:"csrf"`
+		}
+
+		if err := c.ShouldBind(&p); err != nil {
+			c.AbortWithError(http.StatusBadRequest, err)
+			return
+		}
+
+		if p.CSRF != z.csrf {
+			c.AbortWithStatusJSON(http.StatusOK, gin.H{
+				"error": "bad_csrf",
+			})
+			return
+		}
+
+		_, err := openBrowser("https://twitch.tv/", z.config, z.execPath, "")
+		if err != nil {
+			log.Printf("cannot open Twitch browser: %s", err)
 		}
 
 		c.Redirect(http.StatusFound, "/?tab=twitch")
@@ -902,6 +986,7 @@ func (z *ZDRCT) initAPI() error {
 			NoMappedRewardCommands bool   `form:"no_mapped_reward_commands"`
 			SoundVolume            int    `form:"sound_volume"`
 			StaticCSRF             string `form:"static_csrf"`
+			SocksProxy             string `form:"socks_proxy"`
 
 			CSRF string `form:"csrf"`
 		}
@@ -924,6 +1009,16 @@ func (z *ZDRCT) initAPI() error {
 		z.config.NoMappedRewardCommands = p.NoMappedRewardCommands
 		z.config.SoundVolume = p.SoundVolume
 		z.config.StaticCSRF = p.StaticCSRF
+		oldSocksProxy := z.config.SocksProxy
+		z.config.SocksProxy = strings.TrimSpace(p.SocksProxy)
+		z.tw_broadcaster.SetSocksProxy(z.config.SocksProxy)
+		z.tw_bot.SetSocksProxy(z.config.SocksProxy)
+		z.yt_bot.SetSocksProxy(z.config.SocksProxy)
+		z.remote.SetSocksProxy(z.config.SocksProxy)
+		if oldSocksProxy != z.config.SocksProxy {
+			z.bot.ReconnectIRC()
+			z.yt_bot.ReconnectLiveChat()
+		}
 
 		if err := z.config.Save(); err != nil {
 			log.Printf("cannot save config: %s", err)
@@ -1115,17 +1210,14 @@ func (z *ZDRCT) Start() error {
 
 	log.Println("Starting up a server on http://localhost:8666/")
 	go func() {
+		url := "http://localhost:8666/"
 		switch runtime.GOOS {
 		case "linux":
-			go exec.Command("xdg-open", "http://localhost:8666/").Run()
+			go exec.Command("xdg-open", url).Run()
 		case "windows":
-			go exec.Command(
-				"rundll32",
-				"url.dll,FileProtocolHandler",
-				"http://localhost:8666/",
-			).Run()
+			go exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Run()
 		case "darwin":
-			go exec.Command("open", "http://localhost:8666/").Run()
+			go exec.Command("open", url).Run()
 		}
 	}()
 

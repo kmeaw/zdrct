@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -45,8 +46,10 @@ const yt_BOT_SCOPES = "https://www.googleapis.com/auth/youtube"
 const yt_SERVER_ADDR = "youtube.googleapis.com:443"
 
 type YoutubeClient struct {
-	h  *http.Client
-	mu *sync.Mutex
+	h          *http.Client
+	mu         *sync.Mutex
+	socksProxy string
+	streamConn *grpc.ClientConn
 
 	Login        string
 	Token        string
@@ -55,17 +58,39 @@ type YoutubeClient struct {
 	LiveChatID   string
 }
 
+type YoutubeClientOpts struct {
+	SocksProxy string
+}
+
 type YoutubeMessage struct {
 	From string
 	Body string
 }
 
-func NewYoutubeClient() *YoutubeClient {
+func NewYoutubeClient(opts YoutubeClientOpts) *YoutubeClient {
 	return &YoutubeClient{
-		h: &http.Client{
-			Timeout: 10 * time.Second,
-		},
-		mu: new(sync.Mutex),
+		h:          newHTTPClient(opts.SocksProxy, 10*time.Second),
+		mu:         new(sync.Mutex),
+		socksProxy: strings.TrimSpace(opts.SocksProxy),
+	}
+}
+
+func (c *YoutubeClient) SetSocksProxy(socksProxy string) {
+	socksProxy = strings.TrimSpace(socksProxy)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.socksProxy = socksProxy
+	c.h = newHTTPClient(socksProxy, 10*time.Second)
+}
+
+func (c *YoutubeClient) ReconnectLiveChat() {
+	c.mu.Lock()
+	streamConn := c.streamConn
+	c.mu.Unlock()
+
+	if streamConn != nil {
+		streamConn.Close()
 	}
 }
 
@@ -598,10 +623,23 @@ func (c *YoutubeClient) Messages(ctx context.Context) (<-chan YoutubeMessage, er
 		return nil, fmt.Errorf("youtube token is not set")
 	}
 
-	conn, err := grpc.Dial(yt_SERVER_ADDR, grpc.WithTransportCredentials(credentials.NewTLS(nil)))
+	var opts []grpc.DialOption
+	opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(nil)))
+	if c.socksProxy != "" {
+		dialer, err := newSOCKS5Dialer(c.socksProxy, 10*time.Second)
+		if err != nil {
+			return nil, fmt.Errorf("youtube grpc proxy dialer error: %w", err)
+		}
+		opts = append(opts, grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+			return dialWithProxyContext(ctx, dialer, "tcp", addr)
+		}))
+	}
+
+	conn, err := grpc.Dial(yt_SERVER_ADDR, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("youtube grpc dial error: %w", err)
 	}
+	c.streamConn = conn
 
 	client := streamlist.NewV3DataLiveChatMessageServiceClient(conn)
 
@@ -615,6 +653,8 @@ func (c *YoutubeClient) Messages(ctx context.Context) (<-chan YoutubeMessage, er
 
 	stream, err := client.StreamList(ctx, req)
 	if err != nil {
+		c.streamConn = nil
+		conn.Close()
 		return nil, fmt.Errorf("youtube grpc could not stream messages: %w", err)
 	}
 
@@ -624,7 +664,14 @@ func (c *YoutubeClient) Messages(ctx context.Context) (<-chan YoutubeMessage, er
 
 	ch := make(chan YoutubeMessage)
 	go func(chan<- YoutubeMessage) {
-		defer conn.Close()
+		defer func() {
+			conn.Close()
+			c.mu.Lock()
+			if c.streamConn == conn {
+				c.streamConn = nil
+			}
+			c.mu.Unlock()
+		}()
 		defer close(ch)
 
 		for {
