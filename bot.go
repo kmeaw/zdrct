@@ -165,8 +165,8 @@ func (b *Bot) ProcessMessage(ctx context.Context, from, msg string) error {
 		return fmt.Errorf("script is not loaded, ignoring %q: %q", from, msg)
 	}
 
-	if _, ok := b.Balances[from]; !ok {
-		b.Balances[from] = 5
+	if _, ok := b.Balances[strings.ToLower(from)]; !ok {
+		b.Balances[strings.ToLower(from)] = 5
 	}
 
 	if new_prefix, ok := ctx.Value("prefix").(string); !ok || new_prefix == "" {
@@ -249,7 +249,6 @@ func (b *Bot) Handle(c *irc.Client, m *irc.Message) {
 
 	if m.Command == "001" {
 		// 001 is a welcome event, so we join channels there
-		c.Write("CAP REQ twitch.tv/tags")
 		c.Write("JOIN #" + ch)
 	} else if m.Command == "JOIN" && c.FromChannel(m) {
 		if strings.ToLower(m.Prefix.User) != strings.ToLower(c.CurrentNick()) {
@@ -422,13 +421,13 @@ func raid() {
 		b.mu.Lock()
 		defer b.mu.Unlock()
 
-		return b.Balances[name]
+		return b.Balances[strings.ToLower(name)]
 	}))
 	errors = append(errors, b.e.Define("set_balance", func(name string, value int) {
 		b.mu.Lock()
 		defer b.mu.Unlock()
 
-		b.Balances[name] = value
+		b.Balances[strings.ToLower(name)] = value
 	}))
 	errors = append(errors, b.e.Define("actor_alert", func(actor *Actor, from string) {
 		tmpl, err := template.New("actor_alert").Parse(actor.AlertText)

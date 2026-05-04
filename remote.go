@@ -31,6 +31,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -78,6 +79,7 @@ func (r *Remote) connectOnce() error {
 	if r.Broadcaster == nil || r.Broadcaster.Token == "" || r.Broadcaster.Login == "" {
 		return ErrNoConfig
 	}
+
 	r.conn, err = websocket.DialConfig(&websocket.Config{
 		Location: &url.URL{
 			Scheme:   "wss",
@@ -92,9 +94,7 @@ func (r *Remote) connectOnce() error {
 			Path:   "/channels/" + url.PathEscape(r.Broadcaster.Login),
 		},
 
-		Dialer: &net.Dialer{
-			Timeout: 10 * time.Second,
-		},
+		Dialer: &net.Dialer{Timeout: 10 * time.Second},
 
 		Version: websocket.ProtocolVersionHybi13,
 	})
@@ -212,6 +212,7 @@ func (r *Remote) connectEventSub() error {
 	if r.Broadcaster == nil || r.Broadcaster.Token == "" || r.Broadcaster.Login == "" {
 		return ErrNoConfig
 	}
+
 	r.connEventSub, err = websocket.DialConfig(&websocket.Config{
 		Location: r.eventSubLocation,
 
@@ -220,9 +221,7 @@ func (r *Remote) connectEventSub() error {
 			Host:   "twitch.tv",
 		},
 
-		Dialer: &net.Dialer{
-			Timeout: 10 * time.Second,
-		},
+		Dialer: &net.Dialer{Timeout: 10 * time.Second},
 
 		Version: websocket.ProtocolVersionHybi13,
 	})
@@ -342,12 +341,17 @@ func (r *Remote) processNotification(bot *Bot, event EventSubUnknown, bmsg []byt
 			Stream:  *si,
 		}
 
+		name := raid_event.FromBroadcasterUserLogin
+		if strings.ToLower(name) == strings.ToLower(raid_event.FromBroadcasterUserName) {
+			name = raid_event.FromBroadcasterUserName
+		}
+
 		err = bot.ProcessMessage(
 			context.WithValue(
 				context.WithValue(context.Background(), "raid", raid),
 				"prefix", "event_",
 			),
-			raid_event.FromBroadcasterUserLogin,
+			name,
 			"!raid",
 		)
 		if err != nil {
@@ -378,11 +382,16 @@ func (r *Remote) processNotification(bot *Bot, event EventSubUnknown, bmsg []byt
 		reward.SetClient(r.Broadcaster)
 		r.mu.Unlock()
 
+		name := redemption.UserLogin
+		if strings.ToLower(name) == strings.ToLower(redemption.UserName) {
+			name = redemption.UserName
+		}
+
 		cmd, ok := m[redemption.RewardInfo.ID]
 		if ok {
 			log.Printf(
 				"User %s has redeemed a reward %q: %q",
-				redemption.UserLogin,
+				name,
 				redemption.RewardInfo.Title,
 				cmd.Cmd,
 			)
@@ -392,7 +401,7 @@ func (r *Remote) processNotification(bot *Bot, event EventSubUnknown, bmsg []byt
 			}
 			err := bot.ProcessMessage(
 				context.WithValue(context.Background(), "is_reward", true),
-				redemption.UserLogin,
+				name,
 				payload,
 			)
 			if err != nil {
@@ -404,7 +413,7 @@ func (r *Remote) processNotification(bot *Bot, event EventSubUnknown, bmsg []byt
 		} else {
 			log.Printf(
 				"User %s redeems a reward %q: command is not mapped",
-				redemption.UserLogin,
+				name,
 				reward.ID,
 			)
 
