@@ -22,6 +22,11 @@
 	  <small>Leave this field empty to use dynamic CSRF token (recommended).</small>
 	  <br />
 
+	  <label>Socks proxy server: <input name="socks_proxy" type="text" value="{{ .Config.SocksProxy }}" placeholder="192.0.2.123:1080" /></label>
+	  <br />
+	  <small>Leave this field empty for direct connection.</small>
+	  <br />
+
 	  <input type="hidden" name="csrf" value="{{ .CSRF }}" />
 	  <input type="submit" value="Save" />
 	</form>
