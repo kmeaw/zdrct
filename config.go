@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -40,6 +41,7 @@ type Config struct {
 	StaticCSRF             string   `json:"static_csrf,omitempty"`
 	SocksProxy             string   `json:"socks_proxy,omitempty"`
 	AssetMounts            []string `json:"asset_mounts,omitempty"`
+	MediaFilesDir          string   `json:"media_files_dir,omitempty"`
 
 	zdrctConfigDir string
 }
@@ -425,6 +427,46 @@ func (c *Config) ResolveMount(urlPath string) (string, bool) {
 	return "", false
 }
 
+func (c Config) MediaFileURLs() ([]string, error) {
+	result := []string{}
+	if c.MediaFilesDir == "" {
+		return result, nil
+	}
+
+	root := filepath.Clean(c.MediaFilesDir)
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if p == root {
+				return err
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		switch strings.ToLower(filepath.Ext(p)) {
+		case ".mp4", ".webm", ".mpeg4", ".m4v", ".mov":
+		default:
+			return nil
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return nil
+		}
+		parts := strings.Split(filepath.ToSlash(rel), "/")
+		for i, part := range parts {
+			parts[i] = url.PathEscape(part)
+		}
+		result = append(result, "/mediafiles/"+strings.Join(parts, "/"))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
 func (c *Config) InitAssetsTemplates(r *gin.Engine) error {
 	var err error
 	var data []byte
@@ -446,12 +488,12 @@ func (c *Config) InitAssetsTemplates(r *gin.Engine) error {
 
 	funcs := template.FuncMap{
 		"join": strings.Join,
-		"json": func(a any) string {
+		"json": func(a any) template.JS {
 			b, err := json.Marshal(a)
 			if err != nil {
-				return fmt.Sprintf("[error: %s]", err)
+				b, _ = json.Marshal(fmt.Sprintf("error: %s", err))
 			}
-			return string(b)
+			return template.JS(b)
 		},
 		"add":  func(a, b int) int { return a + b },
 		"succ": func(n int) int { return n + 1 },

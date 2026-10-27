@@ -32,6 +32,11 @@
 	  <small>One directory per line. Each directory is served at the web root under its own path, e.g. <b>C:/Users/Юзер/Downloads</b> is available at <b>/C:/Users/%D0%AE%D0%B7%D0%B5%D1%80/Downloads/</b>.</small>
 	  <br />
 
+	  <label>Media files directory: <input type="text" name="media_files_dir" value="{{ .Config.MediaFilesDir }}" placeholder="C:/Users/Юзер/Videos" size="120" /></label>
+	  <br />
+	  <small>Directory with random videos for the OBS browser source at <b>/random-video</b>, scanned recursively for <b>.mp4</b>, <b>.webm</b>, <b>.mpeg4</b>, <b>.m4v</b> and <b>.mov</b> files; leave empty to disable. Requires to restart zdrct when changed.</small>
+	  <br />
+
 	  <input type="hidden" name="csrf" value="{{ .CSRF }}" />
 	  <input type="submit" value="Save" />
 	</form>

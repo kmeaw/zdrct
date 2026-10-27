@@ -811,6 +811,19 @@ func (z *ZDRCT) initAPI() error {
 		c.HTML(http.StatusOK, "alerts.html", nil)
 	})
 
+	z.engine.GET("/random-video", func(c *gin.Context) {
+		mediaFiles, err := z.config.MediaFileURLs()
+		if err != nil {
+			log.Printf("cannot list media files: %s", err)
+			mediaFiles = []string{}
+		}
+		c.HTML(http.StatusOK, "obs-random-videos.html", gin.H{"MediaFiles": mediaFiles})
+	})
+
+	if z.config.MediaFilesDir != "" {
+		z.engine.Static("/mediafiles", z.config.MediaFilesDir)
+	}
+
 	z.engine.GET("/alerts/ws", func(c *gin.Context) {
 		handler := websocket.Handler(func(ws *websocket.Conn) {
 			defer ws.Close()
@@ -988,6 +1001,7 @@ func (z *ZDRCT) initAPI() error {
 			StaticCSRF             string `form:"static_csrf"`
 			SocksProxy             string `form:"socks_proxy"`
 			AssetMounts            string `form:"asset_mounts"`
+			MediaFilesDir          string `form:"media_files_dir"`
 
 			CSRF string `form:"csrf"`
 		}
@@ -1018,6 +1032,7 @@ func (z *ZDRCT) initAPI() error {
 			}
 		}
 		z.config.AssetMounts = assetMounts
+		z.config.MediaFilesDir = strings.TrimSpace(p.MediaFilesDir)
 		oldSocksProxy := z.config.SocksProxy
 		z.config.SocksProxy = strings.TrimSpace(p.SocksProxy)
 		z.tw_broadcaster.SetSocksProxy(z.config.SocksProxy)
