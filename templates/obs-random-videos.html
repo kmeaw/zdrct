@@ -85,7 +85,7 @@ function progressPlaylistState() {
  *  next item after that
  * @returns {string} the next item in the playlist
  */
-function getNextPlaylistItem(returnEncoded = true) {
+function getNextPlaylistItem(returnEncoded = false) {
   const playlist = getPlaylist();
   let mediaItem = playlist.pop() || '';
 
