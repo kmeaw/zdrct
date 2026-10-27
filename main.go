@@ -1032,7 +1032,7 @@ func (z *ZDRCT) initAPI() error {
 		if tab == "" {
 			tab = "twitch"
 		}
-		tables, err := z.config.ReadDir("tables")
+		tables, err := z.config.ReadDir("tables", false)
 		if err != nil {
 			if !errors.Is(err, fs.ErrNotExist) {
 				log.Printf("cannot read tables dir: %s", err)

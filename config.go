@@ -334,7 +334,7 @@ func (c Config) Asset(filename string) string {
 	return filename
 }
 
-func (c Config) ReadDir(dirname string) ([]string, error) {
+func (c Config) ReadDir(dirname string, includeDirs bool) ([]string, error) {
 	locals := make(map[string]bool)
 	entries, err := os.ReadDir(filepath.Join(c.zdrctConfigDir, dirname))
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -344,7 +344,7 @@ func (c Config) ReadDir(dirname string) ([]string, error) {
 	result := make([]string, 0, len(entries))
 
 	for _, entry := range entries {
-		if !entry.Type().IsRegular() {
+		if !entry.Type().IsRegular() && !(includeDirs && entry.IsDir()) {
 			continue
 		}
 
@@ -367,7 +367,7 @@ func (c Config) ReadDir(dirname string) ([]string, error) {
 	}
 
 	for _, entry := range entries {
-		if !entry.Type().IsRegular() {
+		if !entry.Type().IsRegular() && !(includeDirs && entry.IsDir()) {
 			continue
 		}
 		if strings.HasSuffix(entry.Name(), ".swp") || strings.HasPrefix(entry.Name(), ".") || strings.HasSuffix(entry.Name(), "~") {
@@ -401,7 +401,7 @@ func (c Config) InitAssetsTemplates(r *gin.Engine) error {
 
 	var names, pnames []string
 
-	template_files, err := c.ReadDir("templates")
+	template_files, err := c.ReadDir("templates", false)
 	if err != nil {
 		return err
 	}
@@ -487,12 +487,16 @@ func (c Config) InitAssetsTemplates(r *gin.Engine) error {
 	}
 	r.HTMLRender = render
 
-	asset_files, err := c.ReadDir("assets")
+	asset_files, err := c.ReadDir("assets", true)
 	if err != nil {
 		return err
 	}
 	for _, name := range asset_files {
 		name := name
+		if fi, err := os.Stat(name); err == nil && fi.IsDir() {
+			r.Static("/"+filepath.Base(name), name)
+			continue
+		}
 		Assets[filepath.Base(name)] = name
 		r.GET(filepath.Base(name), func(c *gin.Context) {
 			c.File(name)
