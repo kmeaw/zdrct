@@ -235,3 +235,9 @@ make
 ```
 
 Copy ffmpeg.exe and /ucrt64/bin/libwinpthread-1.dll to the target directory.
+
+# Bundled artifacts
+
+* ffmpeg - https://ffmpeg.org - GNU Lesser General Public License (LGPL) version 2.1 or later
+* MSYS2 - https://msys2.org - GNU Lesser General Public License (LGPL) version 2.1 or later
+* obs-random-videos - https://github.com/UpDownLeftDie/obs-random-videos - GNU Affero General Public License (AGPL) version 3

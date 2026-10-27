@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"html/template"
 	"io/fs"
+	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -30,13 +32,14 @@ type Config struct {
 	RconAddress         string `json:"rcon_address,omitempty"`
 	RconPassword        string `json:"rcon_password,omitempty"`
 
-	TtsEndpoint            string `json:"tts_endpoint,omitempty"`
-	RconAutoStart          bool   `json:"rcon_auto_start"`
-	YoutubeAutoStart       bool   `json:"youtube_auto_start"`
-	NoMappedRewardCommands bool   `json:"no_mapped_reward_commands"`
-	SoundVolume            int    `json:"sound_volume,omitempty"`
-	StaticCSRF             string `json:"static_csrf,omitempty"`
-	SocksProxy             string `json:"socks_proxy,omitempty"`
+	TtsEndpoint            string   `json:"tts_endpoint,omitempty"`
+	RconAutoStart          bool     `json:"rcon_auto_start"`
+	YoutubeAutoStart       bool     `json:"youtube_auto_start"`
+	NoMappedRewardCommands bool     `json:"no_mapped_reward_commands"`
+	SoundVolume            int      `json:"sound_volume,omitempty"`
+	StaticCSRF             string   `json:"static_csrf,omitempty"`
+	SocksProxy             string   `json:"socks_proxy,omitempty"`
+	AssetMounts            []string `json:"asset_mounts,omitempty"`
 
 	zdrctConfigDir string
 }
@@ -394,7 +397,35 @@ func (c Config) WriteAsset(basename string, data []byte) error {
 	return os.WriteFile(name, data, 0777)
 }
 
-func (c Config) InitAssetsTemplates(r *gin.Engine) error {
+func (c *Config) ResolveMount(urlPath string) (string, bool) {
+	p := path.Clean("/" + filepath.ToSlash(urlPath))
+	for _, m := range c.AssetMounts {
+		m = strings.TrimSpace(m)
+		if m == "" {
+			continue
+		}
+
+		root := filepath.Clean(m)
+		prefix := "/" + strings.Trim(filepath.ToSlash(root), "/")
+		if prefix != "/" && p != prefix && !strings.HasPrefix(p, prefix+"/") {
+			continue
+		}
+
+		rel := strings.TrimPrefix(strings.TrimPrefix(p, prefix), "/")
+		full := filepath.Join(root, filepath.FromSlash(rel))
+
+		sub, err := filepath.Rel(root, full)
+		if err != nil || sub == ".." || strings.HasPrefix(sub, ".."+string(filepath.Separator)) {
+			continue
+		}
+
+		return full, true
+	}
+
+	return "", false
+}
+
+func (c *Config) InitAssetsTemplates(r *gin.Engine) error {
 	var err error
 	var data []byte
 	var tmpl *template.Template
@@ -502,6 +533,23 @@ func (c Config) InitAssetsTemplates(r *gin.Engine) error {
 			c.File(name)
 		})
 	}
+
+	cfg := c
+	r.NoRoute(func(c *gin.Context) {
+		if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
+			c.String(http.StatusNotFound, "404 page not found")
+			return
+		}
+
+		full, ok := cfg.ResolveMount(c.Request.URL.Path)
+		if !ok {
+			c.String(http.StatusNotFound, "404 page not found")
+			return
+		}
+
+		c.File(full)
+	})
+
 	return nil
 }
 

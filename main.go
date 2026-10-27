@@ -987,6 +987,7 @@ func (z *ZDRCT) initAPI() error {
 			SoundVolume            int    `form:"sound_volume"`
 			StaticCSRF             string `form:"static_csrf"`
 			SocksProxy             string `form:"socks_proxy"`
+			AssetMounts            string `form:"asset_mounts"`
 
 			CSRF string `form:"csrf"`
 		}
@@ -1009,6 +1010,14 @@ func (z *ZDRCT) initAPI() error {
 		z.config.NoMappedRewardCommands = p.NoMappedRewardCommands
 		z.config.SoundVolume = p.SoundVolume
 		z.config.StaticCSRF = p.StaticCSRF
+		var assetMounts []string
+		for _, line := range strings.Split(p.AssetMounts, "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				assetMounts = append(assetMounts, line)
+			}
+		}
+		z.config.AssetMounts = assetMounts
 		oldSocksProxy := z.config.SocksProxy
 		z.config.SocksProxy = strings.TrimSpace(p.SocksProxy)
 		z.tw_broadcaster.SetSocksProxy(z.config.SocksProxy)

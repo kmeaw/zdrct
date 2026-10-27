@@ -27,6 +27,11 @@
 	  <small>Leave this field empty for direct connection.</small>
 	  <br />
 
+	  <label>Mounted asset directories:<br /><textarea name="asset_mounts" rows="3" cols="120" placeholder="C:/Users/Юзер/Downloads">{{ join .Config.AssetMounts "\n" }}</textarea></label>
+	  <br />
+	  <small>One directory per line. Each directory is served at the web root under its own path, e.g. <b>C:/Users/Юзер/Downloads</b> is available at <b>/C:/Users/%D0%AE%D0%B7%D0%B5%D1%80/Downloads/</b>.</small>
+	  <br />
+
 	  <input type="hidden" name="csrf" value="{{ .CSRF }}" />
 	  <input type="submit" value="Save" />
 	</form>
